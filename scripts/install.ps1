@@ -2,9 +2,9 @@
 #   1. copies the built DLLs into the Tally working folder,
 #   2. copies the TDL into the TDL folder,
 #   3. creates the PDF output folder,
-#   4. registers the COM DLL using the 32-bit regasm (TallyPrime is 32-bit).
+#   4. registers the COM DLL with BOTH the 32-bit and 64-bit regasm.
 #
-# Run this from an ELEVATED (Administrator) PowerShell window:
+# Run it from any PowerShell window; it self-elevates (UAC prompt):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 param(
@@ -12,6 +12,28 @@ param(
     [string]$TdlDir    = "C:\Users\Admin\OneDrive\TDL",
     [string]$OutputDir = "C:\Users\Admin\OneDrive\Export"
 )
+
+# --- self-elevate -----------------------------------------------------------
+# Registering the COM DLL writes to HKLM, which needs Administrator. If we are
+# not elevated, relaunch this script in an elevated PowerShell (UAC prompt),
+# forwarding the arguments we were given. -NoExit keeps the window open so you
+# can read the result.
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "Administrator rights are required - requesting elevation ..." -ForegroundColor Yellow
+    $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+    $argString  = "-NoProfile -NoExit -ExecutionPolicy Bypass -File `"$scriptPath`""
+    foreach ($k in $PSBoundParameters.Keys) {
+        $argString += " -$k `"$($PSBoundParameters[$k])`""
+    }
+    try {
+        Start-Process powershell -Verb RunAs -ArgumentList $argString -ErrorAction Stop
+    } catch {
+        Write-Warning "Elevation was cancelled or failed: $($_.Exception.Message)"
+        exit 1
+    }
+    exit
+}
 
 $ErrorActionPreference = "Stop"
 
@@ -39,22 +61,49 @@ Copy-Item (Join-Path $root "TDL\WhatsAppSender.tdl") $TdlDir -Force
 # folder being moved or deleted.
 $installedDll = Join-Path $TallyDir "TallyWhatsappSender.dll"
 
-# TallyPrime is 32-bit, so it must be the 32-bit regasm (Framework, not Framework64).
-$regasm = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
-if (-not (Test-Path $regasm)) { throw "regasm not found at $regasm" }
+# Register with BOTH regasm flavours. The 32-bit one (Framework) is what a
+# 32-bit TallyPrime needs; the 64-bit one (Framework64) covers the case where
+# TallyPrime is 64-bit. Registering this x86 DLL in both registry views is
+# harmless, and it means you do not have to know TallyPrime's bitness.
+$regasms = @(
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"),
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe")
+)
 
-Write-Host "Registering COM DLL with $regasm ..." -ForegroundColor Cyan
-Write-Host "  $installedDll"
-& $regasm $installedDll /codebase
-if ($LASTEXITCODE -ne 0) { throw "regasm failed with exit code $LASTEXITCODE." }
+foreach ($regasm in $regasms) {
+    if (-not (Test-Path $regasm)) {
+        Write-Warning "regasm not found, skipping: $regasm"
+        continue
+    }
+    Write-Host "Registering COM DLL with $regasm ..." -ForegroundColor Cyan
+    Write-Host "  $installedDll"
+    & $regasm $installedDll /codebase
+    if ($LASTEXITCODE -ne 0) { throw "regasm failed with exit code $LASTEXITCODE ($regasm)." }
+}
 
-# Confirm the registration actually landed.
-$progId = "TallyWhatsappSender.WhatsAppSender"
-$progIdKey = "HKLM:\SOFTWARE\Classes\$progId"
-if (Test-Path $progIdKey) {
-    Write-Host "COM registration OK ($progId)." -ForegroundColor Green
+# Confirm the registration actually landed. The ProgId is shared between the
+# 32-bit and 64-bit registry views; the CLSID lives in each view separately.
+$progId  = "TallyWhatsappSender.WhatsAppSender"
+$classId = "9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f"   # [Guid] in Properties\AssemblyInfo.cs
+$checks  = [ordered]@{
+    "ProgId ($progId)"           = "HKLM:\SOFTWARE\Classes\$progId"
+    "CLSID 32-bit (Wow6432Node)" = "HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\$classId\InprocServer32"
+    "CLSID 64-bit"               = "HKLM:\SOFTWARE\Classes\CLSID\$classId\InprocServer32"
+}
+
+$allOk = $true
+foreach ($name in $checks.Keys) {
+    $ok = Test-Path $checks[$name]
+    if (-not $ok) { $allOk = $false }
+    $state = if ($ok) { "OK" } else { "MISSING" }
+    $color = if ($ok) { "Green" } else { "Yellow" }
+    Write-Host ("  {0,-30} {1}" -f $name, $state) -ForegroundColor $color
+}
+
+if ($allOk) {
+    Write-Host "COM registration OK." -ForegroundColor Green
 } else {
-    Write-Warning "Could not find $progIdKey. The DLL may not be registered correctly."
+    Write-Warning "Some COM registry keys are missing. Re-run this script from an ELEVATED PowerShell."
 }
 
 Write-Host ""
@@ -62,3 +111,4 @@ Write-Host "Done." -ForegroundColor Green
 Write-Host "Next: in TallyPrime press F1 > TDLs & Add-Ons > F4, point to" -ForegroundColor Green
 Write-Host "      $(Join-Path $TdlDir 'WhatsAppSender.tdl')" -ForegroundColor Green
 Write-Host "and set 'Load selected TDL files on startup' to Yes." -ForegroundColor Green
+Write-Host "Then RESTART TallyPrime so it picks up the COM registration." -ForegroundColor Green

@@ -4,8 +4,8 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("TallyWhatsappSender")]
 [assembly: AssemblyDescription("Sends TallyPrime invoices to WhatsApp Web through Chrome automation.")]
 [assembly: AssemblyProduct("TallyWhatsappSender")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+[assembly: AssemblyVersion("1.0.2.0")]
+[assembly: AssemblyFileVersion("1.0.2.0")]
 
 // Only the WhatsAppSender class is exposed to COM.
 [assembly: ComVisible(false)]

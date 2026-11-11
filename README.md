@@ -97,21 +97,21 @@ Output lands in `src\TallyWhatsappSender\bin\Release\`.
 
 ## Install
 
-Open an **Administrator** PowerShell and run:
+From any PowerShell window:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-> If you are already inside an elevated PowerShell window and get
-> *"…cannot be loaded because running scripts is disabled on this system"*,
-> either use the command above, or unblock the current session once with:
->
-> ```powershell
-> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-> ```
->
-> Both affect only the current session/invocation, not the whole machine.
+The script **self-elevates**: it detects that it is not running as Administrator,
+prompts for UAC, and reopens itself in an elevated window automatically. You do
+not need to open an Administrator window first.
+
+> If the script is blocked with *"…cannot be loaded because running scripts is
+> disabled on this system"*, the `-ExecutionPolicy Bypass` form above runs it for
+> that one invocation only and does not change the machine-wide policy. From
+> inside a PowerShell window you can alternatively unblock the current session
+> once with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
 
 This will:
 
@@ -121,13 +121,16 @@ This will:
    (default `C:\Users\Admin\OneDrive\TDL` — change with `-TdlDir`),
 3. create the PDF export folder
    (default `C:\Users\Admin\OneDrive\Export` — change with `-OutputDir`),
-4. register the COM DLL with the **32-bit** `regasm /codebase`.
+4. register the COM DLL with **both** the 32-bit and 64-bit
+   `regasm /codebase` (so it works whichever architecture TallyPrime is), and
+   verify the registry keys landed, printing `COM registration OK`.
 
 Then load the TDL in Tally:
 
 1. Press **F1** (Help) → **TDLs & Add-Ons** → **F4** (Manage Local TDLs).
 2. Set **Load selected TDL files on startup** to **Yes**.
 3. Enter the path to `C:\Users\Admin\OneDrive\TDL\WhatsAppSender.tdl` and accept.
+4. **Restart TallyPrime** so it picks up the COM registration.
 
 ---
 
@@ -172,7 +175,8 @@ Notes:
 
 | Symptom | Fix |
 | --- | --- |
-| *"COM interface is not available"* | The DLL is not registered. Re-run `scripts/install.ps1` as Administrator. Make sure you used the **32-bit** `regasm` (`Framework`, not `Framework64`). |
+| *"COM interface is not available"* | The DLL is not registered, or Tally has not been restarted. Re-run `scripts/install.ps1` (it self-elevates and registers with **both** regasm flavours, then prints `COM registration OK`), and **restart TallyPrime**. If it still fails, run the 32-bit check below. |
+| Not sure if registration took | In an elevated PowerShell: `Test-Path 'HKLM:\SOFTWARE\Classes\TallyWhatsappSender.WhatsAppSender'`, `Test-Path 'HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f\InprocServer32'` (32-bit), and `Test-Path 'HKLM:\SOFTWARE\Classes\CLSID\9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f\InprocServer32'` (64-bit). |
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
 | WhatsApp Web shows a QR code | First run only. Scan it; the session is then remembered. |
