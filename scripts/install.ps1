@@ -81,29 +81,76 @@ foreach ($regasm in $regasms) {
     if ($LASTEXITCODE -ne 0) { throw "regasm failed with exit code $LASTEXITCODE ($regasm)." }
 }
 
-# Confirm the registration actually landed. The ProgId is shared between the
-# 32-bit and 64-bit registry views; the CLSID lives in each view separately.
+# Confirm the registration actually landed.
+#
+# reg.exe is used on purpose: it reads the 32-bit and 64-bit registry views
+# explicitly (/reg:32, /reg:64). The PowerShell registry *provider* applies its
+# own view redirection, which made the previous version of this check report
+# "MISSING" for keys that regasm had just created.
 $progId  = "TallyWhatsappSender.WhatsAppSender"
-$classId = "9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f"   # [Guid] in Properties\AssemblyInfo.cs
-$checks  = [ordered]@{
-    "ProgId ($progId)"           = "HKLM:\SOFTWARE\Classes\$progId"
-    "CLSID 32-bit (Wow6432Node)" = "HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\$classId\InprocServer32"
-    "CLSID 64-bit"               = "HKLM:\SOFTWARE\Classes\CLSID\$classId\InprocServer32"
+$classId = "9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f"   # [Guid] on the COM class
+
+function Test-RegKey {
+    param([string]$Key, [string]$View)
+    & reg query $Key /reg:$View *> $null
+    return ($LASTEXITCODE -eq 0)
 }
 
+function Get-RegValue {
+    param([string]$Key, [string]$Name, [string]$View)
+    $out = & reg query $Key /v $Name /reg:$View 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    foreach ($line in $out) {
+        if ($line -match "^\s+$([regex]::Escape($Name))\s+REG_\w+\s+(.+)$") {
+            return $Matches[1].Trim()
+        }
+    }
+    return $null
+}
+
+$inprocKey = "HKLM\SOFTWARE\Classes\CLSID\$classId\InprocServer32"
+
 $allOk = $true
-foreach ($name in $checks.Keys) {
-    $ok = Test-Path $checks[$name]
-    if (-not $ok) { $allOk = $false }
-    $state = if ($ok) { "OK" } else { "MISSING" }
-    $color = if ($ok) { "Green" } else { "Yellow" }
-    Write-Host ("  {0,-30} {1}" -f $name, $state) -ForegroundColor $color
+foreach ($view in @("32", "64")) {
+    $progOk   = Test-RegKey "HKLM\SOFTWARE\Classes\$progId" $view
+    $clsidOk  = Test-RegKey $inprocKey $view
+    $codeBase = Get-RegValue $inprocKey "CodeBase" $view
+    if (-not ($progOk -and $clsidOk)) { $allOk = $false }
+
+    $label = "Registry view ($view-bit)"
+    $state = if ($progOk -and $clsidOk) { "OK" } else { "MISSING" }
+    $color = if ($progOk -and $clsidOk) { "Green" } else { "Yellow" }
+    Write-Host ("  {0,-24} {1,-4} ProgId={2}  CLSID={3}" -f $label, $state, $progOk, $clsidOk) -ForegroundColor $color
+    if ($codeBase) { Write-Host "      CodeBase: $codeBase" -ForegroundColor DarkGray }
+}
+
+# Report which architecture the Tally executable in $TallyDir is. The DLL is
+# AnyCPU, so either answer works - this is here so a support question about it
+# never needs a separate diagnostic run.
+$tallyExe = Get-ChildItem $TallyDir -Filter "Tally*.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+if ($tallyExe) {
+    try {
+        $fs = [IO.File]::OpenRead($tallyExe.FullName)
+        $br = New-Object IO.BinaryReader($fs)
+        $fs.Seek(0x3C, 'Begin') | Out-Null
+        $peOffset = $br.ReadInt32()
+        $fs.Seek($peOffset + 4, 'Begin') | Out-Null
+        $machine = $br.ReadUInt16()
+        $br.Dispose(); $fs.Dispose()
+        $arch = switch ($machine) { 0x14c { "32-bit (x86)" } 0x8664 { "64-bit (x64)" } default { "unknown" } }
+        Write-Host "  Tally executable: $($tallyExe.FullName) -> $arch" -ForegroundColor Cyan
+    } catch {
+        Write-Host "  Tally executable: $($tallyExe.FullName) -> architecture not readable" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  No Tally*.exe found in $TallyDir" -ForegroundColor Yellow
 }
 
 if ($allOk) {
-    Write-Host "COM registration OK." -ForegroundColor Green
+    Write-Host "COM registration OK in both registry views." -ForegroundColor Green
 } else {
-    Write-Warning "Some COM registry keys are missing. Re-run this script from an ELEVATED PowerShell."
+    Write-Warning "A registry view is missing the registration - clients of that architecture cannot load the DLL."
 }
 
 Write-Host ""

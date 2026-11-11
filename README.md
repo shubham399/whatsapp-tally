@@ -176,7 +176,7 @@ Notes:
 | Symptom | Fix |
 | --- | --- |
 | Tally reports the COM call failed, or nothing happens on save | Re-run `scripts/install.ps1` (it self-elevates, registers **both** registry views and prints `COM registration OK`), then **restart TallyPrime**. The TDL now calls the COM interface directly and shows Tally's own error instead of a generic "not available" message. |
-| Not sure if registration took | In an elevated PowerShell: `Test-Path 'HKLM:\SOFTWARE\Classes\TallyWhatsappSender.WhatsAppSender'`, `Test-Path 'HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f\InprocServer32'` (32-bit), and `Test-Path 'HKLM:\SOFTWARE\Classes\CLSID\9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f\InprocServer32'` (64-bit). |
+| Not sure if registration took | `scripts/install.ps1` ends with a per-view report (`Registry view (32-bit) OK ProgId=True CLSID=True`, the `CodeBase` path, and the architecture of the Tally executable it found). If a view says `MISSING`, the DLL could not be loaded by a client of that architecture. |
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
 | WhatsApp Web shows a QR code | First run only. Scan it; the session is then remembered. |
