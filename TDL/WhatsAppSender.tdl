@@ -2,9 +2,10 @@
 ;;  WhatsApp Sender for TallyPrime
 ;;  ---------------------------------------------------------------------------
 ;;  When a Sales voucher is saved, this TDL:
-;;    1. Asks whether the invoice should be sent on WhatsApp.
-;;    2. Exports the current voucher to a PDF file.
-;;    3. Reads the party's primary mobile number from the ledger.
+;;    1. Reads the party's primary mobile number from the ledger. If the party
+;;       has no mobile number, it does nothing (no prompt, no export).
+;;    2. Asks whether the invoice should be sent on WhatsApp.
+;;    3. Exports the current voucher to a PDF file.
 ;;    4. Calls the companion COM DLL (TallyWhatsappSender.dll). The DLL opens
 ;;       Google Chrome, loads https://web.whatsapp.com and sends the PDF.
 ;;
@@ -35,44 +36,44 @@
     Variable : vCaption  : String
     Variable : vFileName : String
 
-    ;; 1. Ask the user first.
-    001 : Query Box : "Send this invoice on WhatsApp?" : Yes : No
+    ;; 1. Read the party's primary mobile number(s) from the ledger. Everything
+    ;;    below only runs when the party actually has a mobile number, so the
+    ;;    prompt never appears for cash sales or parties without a number.
+    001 : SET : vContacts : @@GetContacts
 
-    002 : If : $$LastResult
+    002 : If : NOT $$IsEmpty:##vContacts
 
-              ;; 2. Read the party's primary mobile number(s) from the ledger.
-    003 :   SET : vContacts : @@GetContacts
+              ;; 2. Ask the user.
+    003 :   Query Box : "Send this invoice on WhatsApp?" : Yes : No
 
-    004 :   If : $$IsEmpty:##vContacts
-    005 :     Msg Box : "WhatsApp" : "This party has no mobile number in the ledger. Please add the Mobile No. and try again."
-    006 :   Else
+    004 :   If : $$LastResult
 
                 ;; 3. Make sure the output folder exists.
-    007 :     If : NOT $$IsDirectory:@@WAFolder
-    008 :       Make Dir : @@WAFolder
-    009 :     End If
+    005 :     If : NOT $$IsDirectory:@@WAFolder
+    006 :       Make Dir : @@WAFolder
+    007 :     End If
 
                 ;; 4. Export the current voucher to a PDF file.
-    010 :     SET : vFileName : @@WAFolder + "\\WhatsApp_Invoice"
-    011 :     SET : SVExportFormat : $$SysName:PDF
-    012 :     SET : SVPrintFileName : $$MakeExportName:##vFileName:##SVExportFormat
-    013 :     SET : SVOpenFileAfterExport : No
-    014 :     EXPORT REPORT : . : Yes : Yes
+    008 :     SET : vFileName : @@WAFolder + "\\WhatsApp_Invoice"
+    009 :     SET : SVExportFormat : $$SysName:PDF
+    010 :     SET : SVPrintFileName : $$MakeExportName:##vFileName:##SVExportFormat
+    011 :     SET : SVOpenFileAfterExport : No
+    012 :     EXPORT REPORT : . : Yes : Yes
 
                 ;; 5. Hand over to the COM DLL (Chrome / WhatsApp Web).
-    015 :     SET : vCaption : @@Caption
-    016 :     If : $$IsCOMInterfaceInvokable:WhatsAppEngine
-    017 :       EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
-    018 :       Msg Box : "WhatsApp" : $$LastResult
-    019 :     Else
-    020 :       Msg Box : "WhatsApp" : "The COM interface is not available. Please register TallyWhatsappSender.dll using regasm /codebase."
-    021 :     End If
+    013 :     SET : vCaption : @@Caption
+    014 :     If : $$IsCOMInterfaceInvokable:WhatsAppEngine
+    015 :       EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
+    016 :       Msg Box : "WhatsApp" : $$LastResult
+    017 :     Else
+    018 :       Msg Box : "WhatsApp" : "The COM interface is not available. Please register TallyWhatsappSender.dll using regasm /codebase."
+    019 :     End If
 
-    022 :   End If
+    020 :   End If
 
-    023 : End If
+    021 : End If
 
-    024 : Return
+    022 : Return
 
 
 ;; ---------------------------------------------------------------------------

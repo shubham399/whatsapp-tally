@@ -3,10 +3,11 @@
 Send a **Sales invoice as a PDF** to the customer's **primary mobile number** on
 **WhatsApp Web (`web.whatsapp.com`) in Google Chrome**, directly from Tally.
 
-When you save a Sales voucher, Tally asks whether to send it on WhatsApp. If you
-say yes, it exports the voucher to PDF, reads the party's mobile number from the
-ledger, and hands the job to a small helper that drives Chrome on WhatsApp Web
-and sends the file.
+When you save a Sales voucher, Tally reads the party's mobile number from the
+ledger. If the party has one, Tally asks whether to send the invoice on WhatsApp;
+if you say yes, it exports the voucher to PDF and hands the job to a small helper
+that drives Chrome on WhatsApp Web and sends the file. Parties **without** a
+mobile number are skipped silently — no prompt, no export.
 
 This is a modernised rebuild of
 [`tejavarma-aln/TallyWhatsappSender`](https://github.com/tejavarma-aln/TallyWhatsappSender)
@@ -19,9 +20,10 @@ This is a modernised rebuild of
 ```
  ┌─────────────┐   On: Form Accept   ┌───────────────────────────────────────┐
  │ TallyPrime  │ ──────────────────► │ TDL: WA_SendInvoiceOnWhatsApp         │
- │ Sales Color │                     │  1. Query Box  (send on WhatsApp?)    │
- └─────────────┘                     │  2. EXPORT REPORT  -> PDF             │
-                                     │  3. $LedgerMobile -> phone number     │
+ │ Sales Color │                     │  1. $LedgerMobile -> phone number     │
+ └─────────────┘                     │     (no number? stop, no prompt)      │
+                                     │  2. Query Box  (send on WhatsApp?)    │
+                                     │  3. EXPORT REPORT  -> PDF             │
                                      │  4. EXEC COM INTERFACE WhatsAppEngine │
                                      └───────────────┬───────────────────────┘
                                                      │ COM (IDispatch)
@@ -136,7 +138,8 @@ Then load the TDL in Tally:
    *Ledger → F12 → Provide Contact Details = Yes → **Mobile No.***
    Enter a **10-digit** number; `91` is added automatically. (You may put several
    comma-separated numbers to send to more than one contact.)
-3. Save the voucher (**Ctrl+A**). Tally asks *"Send this invoice on WhatsApp?"*.
+3. Save the voucher (**Ctrl+A**). If the party has a mobile number, Tally asks
+   *"Send this invoice on WhatsApp?"*; parties without one are skipped silently.
 4. The first time, Chrome opens WhatsApp Web and shows a **QR code** — scan it
    with your phone. The login is remembered in a dedicated Chrome profile, so
    later sends go straight through.
@@ -170,7 +173,7 @@ Notes:
 | Symptom | Fix |
 | --- | --- |
 | *"COM interface is not available"* | The DLL is not registered. Re-run `scripts/install.ps1` as Administrator. Make sure you used the **32-bit** `regasm` (`Framework`, not `Framework64`). |
-| *"no valid 10-digit mobile number"* | The party ledger has no Mobile No. (or it is too short). Enter a 10-digit number. |
+| *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
 | WhatsApp Web shows a QR code | First run only. Scan it; the session is then remembered. |
 | *"document preview did not appear"* / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `SendButtonXPaths`, `ComposeBoxXPaths`, `FindFileInput`). |
