@@ -68,19 +68,23 @@ Tally.ERP 9 Release 4.6. The DLL does the browser automation.
 
 ## Build
 
-From the repository root:
+From the repository root (run the script with the execution policy bypassed so
+it works even when scripts are blocked):
 
 ```powershell
-./scripts/build.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 ```
 
 or directly:
 
 ```powershell
-dotnet build ./src/TallyWhatsappSender/TallyWhatsappSender.csproj -c Release
+dotnet build .\src\TallyWhatsappSender\TallyWhatsappSender.csproj -c Release
 ```
 
-Output lands in `src/TallyWhatsappSender/bin/Release/`.
+Output lands in `src\TallyWhatsappSender\bin\Release\`.
+
+> `-ExecutionPolicy Bypass` applies to that one invocation only — it does **not**
+> change the machine-wide policy.
 
 > `chromedriver.exe` (optional): Selenium 4 can fetch a matching driver
 > automatically, but for an offline machine drop a `chromedriver.exe` that
@@ -94,8 +98,18 @@ Output lands in `src/TallyWhatsappSender/bin/Release/`.
 Open an **Administrator** PowerShell and run:
 
 ```powershell
-./scripts/install.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
+
+> If you are already inside an elevated PowerShell window and get
+> *"…cannot be loaded because running scripts is disabled on this system"*,
+> either use the command above, or unblock the current session once with:
+>
+> ```powershell
+> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+> ```
+>
+> Both affect only the current session/invocation, not the whole machine.
 
 This will:
 

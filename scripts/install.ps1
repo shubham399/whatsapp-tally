@@ -4,7 +4,8 @@
 #   3. creates the PDF output folder,
 #   4. registers the COM DLL using the 32-bit regasm (TallyPrime is 32-bit).
 #
-# Run this from an ELEVATED (Administrator) PowerShell window.
+# Run this from an ELEVATED (Administrator) PowerShell window:
+#   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 param(
     [string]$TallyDir  = "C:\Program Files\TallyPrime",

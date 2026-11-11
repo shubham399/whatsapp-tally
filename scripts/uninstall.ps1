@@ -1,5 +1,6 @@
 # Unregisters the COM DLL and removes the files copied into the Tally folder.
-# Run from an ELEVATED (Administrator) PowerShell window.
+# Run from an ELEVATED (Administrator) PowerShell window:
+#   powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
 
 param(
     [string]$TallyDir = "C:\Program Files\TallyPrime",

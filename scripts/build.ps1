@@ -1,5 +1,6 @@
 # Builds TallyWhatsappSender.dll (the COM DLL) in Release.
-# Requires the .NET SDK (dotnet). Run from any PowerShell.
+# Requires the .NET SDK (dotnet). Run from any PowerShell:
+#   powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 $ErrorActionPreference = "Stop"
 
