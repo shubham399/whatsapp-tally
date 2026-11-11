@@ -1,0 +1,118 @@
+;; ============================================================================
+;;  WhatsApp Sender for TallyPrime
+;;  ---------------------------------------------------------------------------
+;;  When a Sales voucher is saved, this TDL:
+;;    1. Asks whether the invoice should be sent on WhatsApp.
+;;    2. Exports the current voucher to a PDF file.
+;;    3. Reads the party's primary mobile number from the ledger.
+;;    4. Calls the companion COM DLL (TallyWhatsappSender.dll). The DLL opens
+;;       Google Chrome, loads https://web.whatsapp.com and sends the PDF.
+;;
+;;  Target : TallyPrime 2.1  (Windows 11)
+;;  Load   : F1 > TDLs & Add-Ons > F4 (Manage Local TDLs) > load this file
+;;           and set "Load selected TDL files on startup" to Yes.
+;; ============================================================================
+
+
+;; ---------------------------------------------------------------------------
+;;  Hook the Sales voucher form. When the user accepts (saves) the voucher the
+;;  "Form Accept" event fires and we run our function.
+;;
+;;  On TallyPrime the voucher is still saved normally - the event is a
+;;  notification, it does not replace the default accept, so the function does
+;;  NOT need to call "FORM ACCEPT" itself.
+;; ---------------------------------------------------------------------------
+[#Form: Sales Color]
+    On : Form Accept : Yes : CALL : WA_SendInvoiceOnWhatsApp
+
+
+;; ---------------------------------------------------------------------------
+;;  The workhorse function.
+;; ---------------------------------------------------------------------------
+[Function: WA_SendInvoiceOnWhatsApp]
+
+    Variable : vContacts : String
+    Variable : vCaption  : String
+    Variable : vFileName : String
+
+    ;; 1. Ask the user first.
+    001 : Query Box : "Send this invoice on WhatsApp?" : Yes : No
+
+    002 : If : $$LastResult
+
+              ;; 2. Read the party's primary mobile number(s) from the ledger.
+    003 :   SET : vContacts : @@GetContacts
+
+    004 :   If : $$IsEmpty:##vContacts
+    005 :     Msg Box : "WhatsApp" : "This party has no mobile number in the ledger. Please add the Mobile No. and try again."
+    006 :   Else
+
+                ;; 3. Make sure the output folder exists.
+    007 :     If : NOT $$IsDirectory:@@WAFolder
+    008 :       Make Dir : @@WAFolder
+    009 :     End If
+
+                ;; 4. Export the current voucher to a PDF file.
+    010 :     SET : vFileName : @@WAFolder + "\\WhatsApp_Invoice"
+    011 :     SET : SVExportFormat : $$SysName:PDF
+    012 :     SET : SVPrintFileName : $$MakeExportName:##vFileName:##SVExportFormat
+    013 :     SET : SVOpenFileAfterExport : No
+    014 :     EXPORT REPORT : . : Yes : Yes
+
+                ;; 5. Hand over to the COM DLL (Chrome / WhatsApp Web).
+    015 :     SET : vCaption : @@Caption
+    016 :     If : $$IsCOMInterfaceInvokable:WhatsAppEngine
+    017 :       EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
+    018 :       Msg Box : "WhatsApp" : $$LastResult
+    019 :     Else
+    020 :       Msg Box : "WhatsApp" : "The COM interface is not available. Please register TallyWhatsappSender.dll using regasm /codebase."
+    021 :     End If
+
+    022 :   End If
+
+    023 : End If
+
+    024 : Return
+
+
+;; ---------------------------------------------------------------------------
+;;  The external COM DLL entry point.
+;;  Tally builds the ProgID as "Project.Class" = TallyWhatsappSender.WhatsAppSender
+;;  and calls the method named by "Interface".
+;; ---------------------------------------------------------------------------
+[COM Interface: WhatsAppEngine]
+    Project   : TallyWhatsappSender
+    Class     : WhatsAppSender
+    Interface : Send
+    Parameter : p1 : String : In
+    Parameter : p2 : String : In
+    Parameter : p3 : String : In
+    Parameter : p4 : String : In
+    Return    : String
+
+
+;; ---------------------------------------------------------------------------
+;;  Editable settings. Change the paths and caption here.
+;;  (Referenced in the function above with the @@ prefix.)
+;; ---------------------------------------------------------------------------
+[System: Formulae]
+
+    ;; Folder where the invoice PDF is written. It is created automatically if
+    ;; it does not exist. Use double backslashes. It may be an absolute path
+    ;; (recommended) or a path relative to the Tally working directory.
+    WAFolder : "C:\\Users\\Admin\\OneDrive\\Export"
+
+    ;; Full path to Google Chrome.
+    ChromeBinaryPath : "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+
+    ;; Party's primary mobile number, taken from the ledger's Mobile No. field.
+    ;; You may store several comma separated numbers in that field.
+    GetContacts : ($LedgerMobile:Ledger:$PartyLedgerName)
+
+    ;; Caption sent along with the PDF. Edit freely.
+    Caption : "Dear " + $PartyLedgerName + ", please find attached invoice " + $$String:$VoucherTypeName + " No. " + $$String:$VoucherNumber + " dated " + $$String:$Date + " for Rs. " + $$String:$Amount + ". Thank you."
+
+
+;; ============================================================================
+;;  END OF TDL
+;; ============================================================================
