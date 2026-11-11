@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -24,6 +25,44 @@ namespace TallyWhatsappSender
     [ClassInterface(ClassInterfaceType.AutoDual)]
     public class WhatsAppSender
     {
+        /// <summary>
+        /// Tally.exe is the process that loads us, so it owns the AppDomain and
+        /// its configuration file - which means we cannot add assembly binding
+        /// redirects to it. When a dependency's assembly version differs from
+        /// the version Selenium references (for example System.Text.Json
+        /// 8.0.0.4 on disk vs 8.0.0.0 in WebDriver.dll), binding fails with
+        /// HRESULT 0x80131040 before our code can run. This handler resolves
+        /// such a reference from the DLL's own folder.
+        /// </summary>
+        static WhatsAppSender()
+        {
+            AppDomain.CurrentDomain.AssemblyResolve += ResolveFromInstallFolder;
+        }
+
+        private static Assembly ResolveFromInstallFolder(object sender, ResolveEventArgs args)
+        {
+            try
+            {
+                var requested = new AssemblyName(args.Name);
+                var folder = Path.GetDirectoryName(typeof(WhatsAppSender).Assembly.Location);
+                if (string.IsNullOrEmpty(folder) || string.IsNullOrEmpty(requested.Name))
+                {
+                    return null;
+                }
+
+                var candidate = Path.Combine(folder, requested.Name + ".dll");
+                if (File.Exists(candidate))
+                {
+                    return Assembly.LoadFrom(candidate);
+                }
+            }
+            catch
+            {
+                // Fall through: let the default probing continue / report.
+            }
+
+            return null;
+        }
         // WhatsApp Web's markup changes from time to time. Every selector is
         // collected here so they can be updated without touching the flow.
 
@@ -49,9 +88,26 @@ namespace TallyWhatsappSender
             "//div[@title='Attach']"
         };
 
-        // How long to wait for WhatsApp Web to open a chat (this covers the
-        // one-time QR-code login) and for the document preview to appear.
-        private const int LoginTimeoutSeconds = 120;
+        // The chat list only exists once WhatsApp Web is logged in.
+        private static readonly string[] LoggedInXPaths =
+        {
+            "//div[@id='pane-side']",
+            "//div[@aria-label='Chat list']",
+            "//div[@data-testid='chat-list']"
+        };
+
+        // The "scan this with your phone" screen, shown until the device is linked.
+        private static readonly string[] QrCodeXPaths =
+        {
+            "//canvas[@aria-label]",
+            "//div[@data-ref]",
+            "//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'link with phone number')]"
+        };
+
+        // How long to wait for WhatsApp Web to become usable. This covers the
+        // one-time QR-code login: Chrome opens, the user scans the code with
+        // their phone, and the send continues by itself.
+        private const int LoginTimeoutSeconds = 300;
         private const int ElementTimeoutSeconds = 60;
 
         /// <summary>
@@ -92,6 +148,13 @@ namespace TallyWhatsappSender
                 driver = CreateDriver(baseDir, driverExe, options);
                 var js = (IJavaScriptExecutor)driver;
 
+                if (!EnsureLoggedIn(driver, log))
+                {
+                    return "Error: WhatsApp Web is not logged in. The Chrome window should be showing " +
+                           "a QR code - scan it with your phone (WhatsApp > Linked devices) and then " +
+                           "save the voucher again. The login is remembered, so this is needed only once.";
+                }
+
                 string archivePath = ArchiveCopy(pdfPath);
                 Log(log, "archived = " + archivePath);
 
@@ -103,10 +166,10 @@ namespace TallyWhatsappSender
                     DismissAlert(driver);
 
                     if (!WaitUntil(() => FindVisible(driver, ComposeBoxXPaths) != null,
-                                   TimeSpan.FromSeconds(LoginTimeoutSeconds)))
+                                   TimeSpan.FromSeconds(ElementTimeoutSeconds)))
                     {
                         return "Error: WhatsApp Web did not open a chat for " + number + ". " +
-                               "In the Chrome window scan the QR code to log in once, then try again.";
+                               "Check that the number is registered on WhatsApp.";
                     }
 
                     IWebElement fileInput = FindFileInput(driver);
@@ -202,6 +265,46 @@ namespace TallyWhatsappSender
             // No local chromedriver.exe: let Selenium Manager (Selenium 4) find
             // or download a matching driver (requires internet access).
             return new ChromeDriver(options);
+        }
+
+        /// <summary>
+        /// Makes sure the Chrome profile is linked to a WhatsApp account.
+        ///
+        /// On the very first run the dedicated profile has no session, so
+        /// WhatsApp Web shows the QR code. Chrome is already in the foreground;
+        /// the user scans the code with their phone (WhatsApp > Linked devices)
+        /// and the loop below notices the chat list and continues. WhatsApp
+        /// keeps the session in the profile folder, so later sends skip this.
+        /// </summary>
+        private static bool EnsureLoggedIn(IWebDriver driver, StringBuilder log)
+        {
+            driver.Navigate().GoToUrl("https://web.whatsapp.com");
+            DismissAlert(driver);
+
+            DateTime end = DateTime.UtcNow.AddSeconds(LoginTimeoutSeconds);
+            bool qrSeen = false;
+
+            while (DateTime.UtcNow < end)
+            {
+                if (FindVisible(driver, LoggedInXPaths) != null)
+                {
+                    Log(log, "WhatsApp Web is logged in");
+                    return true;
+                }
+
+                if (!qrSeen && FindVisible(driver, QrCodeXPaths) != null)
+                {
+                    qrSeen = true;
+                    Log(log, "QR code displayed - waiting for the phone to link this device");
+                }
+
+                Thread.Sleep(1000);
+            }
+
+            Log(log, qrSeen
+                ? "still on the QR screen after " + LoginTimeoutSeconds + "s; the code was not scanned"
+                : "chat list did not appear after " + LoginTimeoutSeconds + "s");
+            return false;
         }
 
         // ----- phone numbers ---------------------------------------------------

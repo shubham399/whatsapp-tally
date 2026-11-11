@@ -161,8 +161,39 @@ Then load the TDL in Tally:
 3. Save the voucher (**Ctrl+A**). If the party has a mobile number, Tally asks
    *"Send this invoice on WhatsApp?"*; parties without one are skipped silently.
 4. The first time, Chrome opens WhatsApp Web and shows a **QR code** — scan it
-   with your phone. The login is remembered in a dedicated Chrome profile, so
-   later sends go straight through.
+   with your phone (**WhatsApp → Linked devices → Link a device**). The send
+   continues by itself once the chat list appears; you have **5 minutes** to
+   scan before it gives up. The login is stored in a dedicated Chrome profile,
+   so every later send goes straight through.
+
+   Tally is blocked while this runs, so nothing else needs to be clicked in
+   Tally — just scan the code in the Chrome window that opens on top.
+
+### The login (QR) flow
+
+```
+ save voucher ─► Chrome starts with its own profile
+                     │
+                     ├─ already linked ──► chat opens ──► PDF + caption ──► sent
+                     │
+                     └─ first run / logged out
+                              │
+                              ▼
+                        QR code shown  ──► you scan it (5 min window)
+                              │
+                              ▼
+                        chat opens ──► PDF + caption ──► sent
+```
+
+* The profile lives in `%LOCALAPPDATA%\TallyWhatsAppSender\chrome-profile`, so
+  it is per Windows user and separate from your normal Chrome profile.
+* WhatsApp keeps the link until you remove it on your phone or delete that
+  folder. To force a fresh QR code, close Tally and delete the folder.
+* If the 5 minutes pass without a scan, the dialog says so and nothing is sent —
+  save the voucher again to retry.
+* If the phone has no internet or WhatsApp Web is down, the dialog reports that
+  the chat list never appeared; the log at
+  `%LOCALAPPDATA%\TallyWhatsAppSender\log.txt` says which stage failed.
 
 ---
 
@@ -196,7 +227,9 @@ Notes:
 | Not sure if registration took | `scripts/install.ps1` ends with a per-view report (`Registry view (32-bit) OK ProgId=True CLSID=True`, the `CodeBase` path, and the architecture of the Tally executable it found). If a view says `MISSING`, the DLL could not be loaded by a client of that architecture. |
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
-| WhatsApp Web shows a QR code | First run only. Scan it; the session is then remembered. |
+| *"Could not load file or assembly 'System.Text.Json, Version=8.0.0.0' … 0x80131040"* | The DLL ships `System.Text.Json` 8.0.4, whose assembly version is 8.0.0.4, while Selenium asks for 8.0.0.0. Tally.exe owns the config file, so no binding redirect can be added; versions before 1.0.6 therefore failed. Update to 1.0.6 or later, which resolves the reference from the DLL's own folder (`AssemblyResolve` in `WhatsAppSender.cs`). |
+| WhatsApp Web shows a QR code | First run only. Scan it within 5 minutes; the send continues automatically and the session is stored in `%LOCALAPPDATA%\TallyWhatsAppSender\chrome-profile`. To force a new code, close Chrome/Tally and delete that folder. |
+| *"WhatsApp Web is not logged in"* | The 5-minute QR window expired. Save the voucher again and scan the code in the Chrome window while the prompt is waiting. |
 | *"document preview did not appear"* / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `SendButtonXPaths`, `ComposeBoxXPaths`, `FindFileInput`). |
 | The voucher is **not saved** after the prompt | On a build where `On: Form Accept` replaces the default save, add a second handler so the form is accepted explicitly (see below). |
 | TDL fails to load | Remove the line(s) the compiler complains about. The `EXPORT REPORT`/`SV*` variables are the most version-sensitive; see notes below. |
