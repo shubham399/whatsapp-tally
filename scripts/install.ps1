@@ -34,11 +34,28 @@ Copy-Item (Join-Path $build "*") $TallyDir -Recurse -Force
 Write-Host "Copying TDL to $TdlDir ..." -ForegroundColor Cyan
 Copy-Item (Join-Path $root "TDL\WhatsAppSender.tdl") $TdlDir -Force
 
+# Register the copy that now lives in the Tally folder (NOT the build output),
+# so the /codebase path points next to TallyPrime.exe and survives the build
+# folder being moved or deleted.
+$installedDll = Join-Path $TallyDir "TallyWhatsappSender.dll"
+
+# TallyPrime is 32-bit, so it must be the 32-bit regasm (Framework, not Framework64).
 $regasm = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
 if (-not (Test-Path $regasm)) { throw "regasm not found at $regasm" }
 
 Write-Host "Registering COM DLL with $regasm ..." -ForegroundColor Cyan
-& $regasm $dll /codebase
+Write-Host "  $installedDll"
+& $regasm $installedDll /codebase
+if ($LASTEXITCODE -ne 0) { throw "regasm failed with exit code $LASTEXITCODE." }
+
+# Confirm the registration actually landed.
+$progId = "TallyWhatsappSender.WhatsAppSender"
+$progIdKey = "HKLM:\SOFTWARE\Classes\$progId"
+if (Test-Path $progIdKey) {
+    Write-Host "COM registration OK ($progId)." -ForegroundColor Green
+} else {
+    Write-Warning "Could not find $progIdKey. The DLL may not be registered correctly."
+}
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
