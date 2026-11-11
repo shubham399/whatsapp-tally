@@ -1,9 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- TallyPrime 2.1 is a 32-bit application, so the COM DLL is x86. -->
+    <!-- AnyCPU on purpose: the DLL then loads into whichever process hosts it.
+         A 32-bit TallyPrime gets a 32-bit instance, a 64-bit TallyPrime gets a
+         64-bit one, so the add-on no longer depends on guessing Tally's
+         architecture. Register it in BOTH registry views (see install.ps1). -->
     <TargetFramework>net48</TargetFramework>
-    <PlatformTarget>x86</PlatformTarget>
+    <PlatformTarget>AnyCPU</PlatformTarget>
     <AssemblyName>TallyWhatsappSender</AssemblyName>
     <RootNamespace>TallyWhatsappSender</RootNamespace>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>

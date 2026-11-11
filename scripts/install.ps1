@@ -61,10 +61,10 @@ Copy-Item (Join-Path $root "TDL\WhatsAppSender.tdl") $TdlDir -Force
 # folder being moved or deleted.
 $installedDll = Join-Path $TallyDir "TallyWhatsappSender.dll"
 
-# Register with BOTH regasm flavours. The 32-bit one (Framework) is what a
-# 32-bit TallyPrime needs; the 64-bit one (Framework64) covers the case where
-# TallyPrime is 64-bit. Registering this x86 DLL in both registry views is
-# harmless, and it means you do not have to know TallyPrime's bitness.
+# Register with BOTH regasm flavours. The DLL is built as AnyCPU, so it works
+# from either process type: the 32-bit regasm (Framework) writes the 32-bit
+# registry view, the 64-bit one (Framework64) writes the 64-bit view. Doing both
+# means you never have to know whether TallyPrime is 32- or 64-bit.
 $regasms = @(
     (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"),
     (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe")

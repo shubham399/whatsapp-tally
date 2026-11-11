@@ -49,7 +49,7 @@ Tally.ERP 9 Release 4.6. The DLL does the browser automation.
 | --- | --- |
 | `TDL/WhatsAppSender.tdl` | The Tally TDL: form hook, PDF export, COM call, settings. |
 | `src/TallyWhatsappSender/WhatsAppSender.cs` | The COM class that drives Chrome / WhatsApp Web. |
-| `src/TallyWhatsappSender/TallyWhatsappSender.csproj` | Project file (`net48`, `x86`, Selenium 4). |
+| `src/TallyWhatsappSender/TallyWhatsappSender.csproj` | Project file (`net48`, `AnyCPU`, Selenium 4). |
 | `scripts/build.ps1` | Builds the DLL. |
 | `scripts/install.ps1` | Copies the DLLs to the Tally folder, copies the TDL to the TDL folder, registers COM, creates the export folder. |
 | `scripts/uninstall.ps1` | Unregisters and removes files. |
@@ -59,7 +59,7 @@ Tally.ERP 9 Release 4.6. The DLL does the browser automation.
 ## Requirements
 
 * **Windows 11**
-* **TallyPrime 2.1** (the standard 32-bit desktop build)
+* **TallyPrime 2.1** or later (32-bit or 64-bit — the add-on handles both)
 * **Google Chrome** installed
 * **.NET Framework 4.8** (already present on Windows 11)
 * To build: the **.NET SDK** (`dotnet`) — [download](https://dotnet.microsoft.com/download)
@@ -175,7 +175,7 @@ Notes:
 
 | Symptom | Fix |
 | --- | --- |
-| *"COM interface is not available"* | The DLL is not registered, or Tally has not been restarted. Re-run `scripts/install.ps1` (it self-elevates and registers with **both** regasm flavours, then prints `COM registration OK`), and **restart TallyPrime**. If it still fails, run the 32-bit check below. |
+| Tally reports the COM call failed, or nothing happens on save | Re-run `scripts/install.ps1` (it self-elevates, registers **both** registry views and prints `COM registration OK`), then **restart TallyPrime**. The TDL now calls the COM interface directly and shows Tally's own error instead of a generic "not available" message. |
 | Not sure if registration took | In an elevated PowerShell: `Test-Path 'HKLM:\SOFTWARE\Classes\TallyWhatsappSender.WhatsAppSender'`, `Test-Path 'HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f\InprocServer32'` (32-bit), and `Test-Path 'HKLM:\SOFTWARE\Classes\CLSID\9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f\InprocServer32'` (64-bit). |
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |

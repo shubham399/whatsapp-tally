@@ -61,19 +61,21 @@
     012 :     EXPORT REPORT : . : Yes : Yes
 
                 ;; 5. Hand over to the COM DLL (Chrome / WhatsApp Web).
+                ;;
+                ;;    The call is made unconditionally. $$IsCOMInterfaceInvokable
+                ;;    is NOT used as a gate: it reports false on some TallyPrime
+                ;;    builds even when the object can be created, and its
+                ;;    "not available" answer hid the real error. If the call
+                ;;    fails, Tally reports the actual problem instead.
     013 :     SET : vCaption : @@Caption
-    014 :     If : $$IsCOMInterfaceInvokable:WhatsAppEngine
-    015 :       EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
-    016 :       Msg Box : "WhatsApp" : $$LastResult
-    017 :     Else
-    018 :       Msg Box : "WhatsApp" : "The COM interface is not available. Please register TallyWhatsappSender.dll using regasm /codebase."
-    019 :     End If
+    014 :     EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
+    015 :     Msg Box : "WhatsApp" : $$LastResult
 
-    020 :   End If
+    016 :   End If
 
-    021 : End If
+    017 : End If
 
-    022 : Return
+    018 : Return
 
 
 ;; ---------------------------------------------------------------------------
