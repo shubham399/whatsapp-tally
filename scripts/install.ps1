@@ -90,17 +90,38 @@ foreach ($regasm in $regasms) {
 $progId  = "TallyWhatsappSender.WhatsAppSender"
 $classId = "9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f"   # [Guid] on the COM class
 
+function Invoke-Reg {
+    # Runs reg.exe and returns its stdout lines plus the exit code. reg writes
+    # "key not found" to stderr, and with $ErrorActionPreference = 'Stop' that
+    # would abort the whole script - so the preference is relaxed just here and
+    # the stderr records are dropped instead of being treated as failures.
+    param([string[]]$RegArgs)
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & reg @RegArgs 2>&1
+        $code   = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $code
+        Lines    = @($output | Where-Object { $_ -is [string] })
+    }
+}
+
 function Test-RegKey {
     param([string]$Key, [string]$View)
-    & reg query $Key /reg:$View *> $null
-    return ($LASTEXITCODE -eq 0)
+    return ((Invoke-Reg @("query", $Key, "/reg:$View")).ExitCode -eq 0)
 }
 
 function Get-RegValue {
     param([string]$Key, [string]$Name, [string]$View)
-    $out = & reg query $Key /v $Name /reg:$View 2>$null
-    if ($LASTEXITCODE -ne 0) { return $null }
-    foreach ($line in $out) {
+    $result = Invoke-Reg @("query", $Key, "/v", $Name, "/reg:$View")
+    if ($result.ExitCode -ne 0) { return $null }
+    foreach ($line in $result.Lines) {
         if ($line -match "^\s+$([regex]::Escape($Name))\s+REG_\w+\s+(.+)$") {
             return $Matches[1].Trim()
         }

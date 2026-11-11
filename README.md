@@ -49,7 +49,8 @@ Tally.ERP 9 Release 4.6. The DLL does the browser automation.
 | --- | --- |
 | `TDL/WhatsAppSender.tdl` | The Tally TDL: form hook, PDF export, COM call, settings. |
 | `src/TallyWhatsappSender/WhatsAppSender.cs` | The COM class that drives Chrome / WhatsApp Web. |
-| `src/TallyWhatsappSender/TallyWhatsappSender.csproj` | Project file (`net48`, `AnyCPU`, Selenium 4). |
+| `src/TallyWhatsappSender/TallyWhatsappSender.csproj` | Project file (`net48`, `AnyCPU`, strong-named, Selenium 4). |
+| `src/TallyWhatsappSender/TallyWhatsappSender.snk` | Public key used for the strong name. |
 | `scripts/build.ps1` | Builds the DLL. |
 | `scripts/install.ps1` | Copies the DLLs to the Tally folder, copies the TDL to the TDL folder, registers COM, creates the export folder. |
 | `scripts/uninstall.ps1` | Unregisters and removes files. |
@@ -122,8 +123,24 @@ This will:
 3. create the PDF export folder
    (default `C:\Users\Admin\OneDrive\Export` — change with `-OutputDir`),
 4. register the COM DLL with **both** the 32-bit and 64-bit
-   `regasm /codebase` (so it works whichever architecture TallyPrime is), and
-   verify the registry keys landed, printing `COM registration OK`.
+   `regasm /codebase` (so it works whichever architecture TallyPrime is), then
+   verify both registry views and print the result.
+
+The DLL is **strong-named** (`src/TallyWhatsappSender/TallyWhatsappSender.snk`),
+so `regasm` does not print the *"Registering an unsigned assembly with
+/codebase"* warning (`RA0000`). That warning is only advisory and never caused
+registration to fail — signing does not affect whether Tally can load the class.
+
+The verification report looks like this:
+
+```
+  Registry view (32-bit)   OK   ProgId=True  CLSID=True
+      CodeBase: C:\Program Files\TallyPrime\TallyWhatsappSender.dll
+  Registry view (64-bit)   OK   ProgId=True  CLSID=True
+      CodeBase: C:\Program Files\TallyPrime\TallyWhatsappSender.dll
+  Tally executable: C:\Program Files\TallyPrime\Tally.exe -> 32-bit (x86)
+COM registration OK in both registry views.
+```
 
 Then load the TDL in Tally:
 

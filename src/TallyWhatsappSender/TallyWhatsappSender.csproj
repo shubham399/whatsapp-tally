@@ -7,6 +7,19 @@
          architecture. Register it in BOTH registry views (see install.ps1). -->
     <TargetFramework>net48</TargetFramework>
     <PlatformTarget>AnyCPU</PlatformTarget>
+
+    <!-- Strong name. regasm /codebase is documented to be used with signed
+         assemblies (unsigned ones trigger warning RA0000). The key file holds
+         only the public key, so this is a "public signed" identity: it gives
+         the assembly a strong name without a Windows code-signing certificate.
+         That is all /codebase needs - it is not Authenticode signing. -->
+    <SignAssembly>true</SignAssembly>
+    <PublicSign>true</PublicSign>
+    <AssemblyOriginatorKeyFile>TallyWhatsappSender.snk</AssemblyOriginatorKeyFile>
+    <!-- CS8002: Selenium's WebDriver.dll is not strong named. A strong-named
+         assembly may reference an unsigned one at runtime, so this is only
+         informational. -->
+    <NoWarn>$(NoWarn);CS8002</NoWarn>
     <AssemblyName>TallyWhatsappSender</AssemblyName>
     <RootNamespace>TallyWhatsappSender</RootNamespace>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
