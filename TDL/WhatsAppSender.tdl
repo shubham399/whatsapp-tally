@@ -69,13 +69,17 @@
                 ;;    fails, Tally reports the actual problem instead.
     013 :     SET : vCaption : @@Caption
     014 :     EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
-    015 :     Msg Box : "WhatsApp" : $$LastResult
+    015 :     If : $$IsEmpty:$$LastResult
+    016 :       Msg Box : "WhatsApp" : "The helper returned no message. Open %LOCALAPPDATA%\TallyWhatsAppSender\log.txt to see how far it got."
+    017 :     Else
+    018 :       Msg Box : "WhatsApp" : $$LastResult
+    019 :     End If
 
-    016 :   End If
+    020 :   End If
 
-    017 : End If
+    021 : End If
 
-    018 : Return
+    022 : Return
 
 
 ;; ---------------------------------------------------------------------------

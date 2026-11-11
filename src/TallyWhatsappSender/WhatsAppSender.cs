@@ -126,26 +126,47 @@ namespace TallyWhatsappSender
                 Log(log, "pdf      = " + pdfPath);
                 Log(log, "caption  = " + caption);
                 Log(log, "chrome   = " + chromeBinary);
+                Log(log, "process  = " + (Environment.Is64BitProcess ? "64-bit" : "32-bit") +
+                         ", CLR " + Environment.Version);
+                Log(log, "basedir  = " + AppDomain.CurrentDomain.BaseDirectory);
 
                 if (string.IsNullOrWhiteSpace(pdfPath))
+                {
+                    Log(log, "no PDF path was supplied - aborting");
                     return "Error: no invoice PDF path was supplied.";
+                }
 
                 pdfPath = ResolvePdfPath(pdfPath);
+                Log(log, "resolved pdf = " + pdfPath + " (exists = " + File.Exists(pdfPath) + ")");
 
                 if (!File.Exists(pdfPath))
+                {
+                    Log(log, "PDF not found - aborting");
                     return "Error: the invoice PDF was not found at " + pdfPath +
                            ". The export may have failed.";
+                }
 
                 List<string> numbers = NormalizeNumbers(contacts);
+                Log(log, "numbers  = " + string.Join(", ", numbers.ToArray()));
+
                 if (numbers.Count == 0)
+                {
+                    Log(log, "no usable number - aborting");
                     return "Error: no valid 10-digit mobile number was found for this party. " +
                            "Please enter a 10-digit mobile number in the party ledger.";
+                }
 
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
                 string driverExe = Path.Combine(baseDir, "chromedriver.exe");
 
                 ChromeOptions options = BuildChromeOptions(chromeBinary);
+                Log(log, "profile   = " + ProfileDirectory());
+                Log(log, "driver    = " + (File.Exists(driverExe) ? driverExe : "none, using Selenium Manager"));
+                Log(log, "starting Chrome ...");
+
                 driver = CreateDriver(baseDir, driverExe, options);
+                Log(log, "Chrome started, browser version = " + SafeBrowserVersion(driver));
+
                 var js = (IJavaScriptExecutor)driver;
 
                 if (!EnsureLoggedIn(driver, log))
@@ -218,12 +239,18 @@ namespace TallyWhatsappSender
             }
             catch (Exception ex)
             {
+                Log(log, "ERROR " + ex.GetType().Name + ": " + ex.Message);
+                if (!string.IsNullOrEmpty(ex.StackTrace))
+                {
+                    Log(log, ex.StackTrace);
+                }
                 return "Error: " + ex.Message;
             }
             finally
             {
-                WriteLog(log);
                 try { if (driver != null) driver.Quit(); } catch { }
+                Log(log, "done");
+                WriteLog(log);
             }
         }
 
@@ -238,9 +265,7 @@ namespace TallyWhatsappSender
             // A dedicated, persistent profile keeps the WhatsApp Web login
             // (the QR scan) between sessions and does not touch the user's own
             // Chrome profile.
-            string profileDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "TallyWhatsAppSender", "chrome-profile");
+            string profileDir = ProfileDirectory();
             Directory.CreateDirectory(profileDir);
 
             options.AddArgument("--user-data-dir=" + profileDir);
@@ -252,19 +277,62 @@ namespace TallyWhatsappSender
             return options;
         }
 
+        private static string ProfileDirectory()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "TallyWhatsAppSender", "chrome-profile");
+        }
+
+        private static string SafeBrowserVersion(IWebDriver driver)
+        {
+            try
+            {
+                var chrome = driver as ChromeDriver;
+                if (chrome == null) return "unknown";
+                object version = chrome.Capabilities.GetCapability("browserVersion");
+                return version != null ? version.ToString() : "unknown";
+            }
+            catch { return "unknown"; }
+        }
+
         private static IWebDriver CreateDriver(string baseDir, string driverExe, ChromeOptions options)
         {
             if (File.Exists(driverExe))
             {
-                ChromeDriverService service =
-                    ChromeDriverService.CreateDefaultService(baseDir, "chromedriver.exe");
-                service.HideCommandPromptWindow = true;
-                return new ChromeDriver(service, options, TimeSpan.FromSeconds(LoginTimeoutSeconds));
+                try
+                {
+                    ChromeDriverService service =
+                        ChromeDriverService.CreateDefaultService(baseDir, "chromedriver.exe");
+                    service.HideCommandPromptWindow = true;
+                    return new ChromeDriver(service, options, TimeSpan.FromSeconds(LoginTimeoutSeconds));
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "Chrome did not start with the bundled driver (" + driverExe + "): " + ex.Message +
+                        " Delete that file so the matching driver can be downloaded automatically.", ex);
+                }
             }
 
-            // No local chromedriver.exe: let Selenium Manager (Selenium 4) find
-            // or download a matching driver (requires internet access).
-            return new ChromeDriver(options);
+            string manager = Path.Combine(baseDir, "selenium-manager", "windows", "selenium-manager.exe");
+            try
+            {
+                // No local chromedriver.exe: let Selenium Manager (Selenium 4)
+                // find or download a matching driver.
+                return new ChromeDriver(options);
+            }
+            catch (Exception ex)
+            {
+                string hint = File.Exists(manager)
+                    ? ""
+                    : " The Selenium driver manager is missing too (expected at " + manager + ").";
+                throw new InvalidOperationException(
+                    "Chrome did not start. No chromedriver.exe sits next to the DLL, so Selenium Manager " +
+                    "has to download a driver that matches Google Chrome." + hint +
+                    " Check that Chrome is installed and that this machine has internet access for the " +
+                    "one-time download. Original error: " + ex.Message, ex);
+            }
         }
 
         /// <summary>
@@ -472,20 +540,36 @@ namespace TallyWhatsappSender
 
         private static void Log(StringBuilder sb, string message)
         {
-            sb.AppendLine(DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture) + "  " + message);
+            string line = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture) + "  " + message;
+            sb.AppendLine(line);
+
+            // Flush every line so the file shows how far a run got even if the
+            // process is still busy, hung, or killed by Tally.
+            try
+            {
+                File.AppendAllText(
+                    Path.Combine(LogDirectory(), "log.txt"),
+                    line + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        private static string LogDirectory()
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "TallyWhatsAppSender");
+            Directory.CreateDirectory(dir);
+            return dir;
         }
 
         private static void WriteLog(StringBuilder sb)
         {
             try
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "TallyWhatsAppSender");
-                Directory.CreateDirectory(dir);
                 File.AppendAllText(
-                    Path.Combine(dir, "log.txt"),
-                    sb.ToString() + new string('-', 40) + Environment.NewLine);
+                    Path.Combine(LogDirectory(), "log.txt"),
+                    new string('-', 40) + Environment.NewLine);
             }
             catch { }
         }

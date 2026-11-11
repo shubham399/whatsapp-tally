@@ -234,7 +234,10 @@ Notes:
 | *"Could not load file or assembly 'System.Text.Json, Version=8.0.0.0' … 0x80131040"* | The DLL ships `System.Text.Json` 8.0.4, whose assembly version is 8.0.0.4, while Selenium asks for 8.0.0.0. Tally.exe owns the config file, so no binding redirect can be added; versions before 1.0.6 therefore failed. Update to 1.0.6 or later, which resolves the reference from the DLL's own folder (`AssemblyResolve` in `WhatsAppSender.cs`). |
 | WhatsApp Web shows a QR code | First run only. Scan it within 5 minutes; the send continues automatically and the session is stored in `%LOCALAPPDATA%\TallyWhatsAppSender\chrome-profile`. To force a new code, close Chrome/Tally and delete that folder. |
 | *"WhatsApp Web is not logged in"* | The 5-minute QR window expired. Save the voucher again and scan the code in the Chrome window while the prompt is waiting. |
-| *"document preview did not appear"* / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `SendButtonXPaths`, `ComposeBoxXPaths`, `FindFileInput`). |
+| The log stops after `chrome = …` | It no longer can: every line is flushed to the file as it happens, so the last line names the stage that failed. Older builds buffered the whole block until the end. |
+| `resolved pdf = … (exists = False)` | The PDF export did not produce the file. Check `WAFolder` and that the voucher report exports (see `SVPrintFileName`/`SVExportFormat`). |
+| `starting Chrome ...` is the last line | Chrome or the driver did not start. Look for the `ERROR` line that follows; if it mentions `chromedriver.exe`, delete that file next to the DLL so Selenium Manager can fetch the matching driver. |
+| `document preview did not appear` / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `SendButtonXPaths`, `ComposeBoxXPaths`, `FindFileInput`). |
 | The voucher is **not saved** after the prompt | On a build where `On: Form Accept` replaces the default save, add a second handler so the form is accepted explicitly (see below). |
 | TDL fails to load | Remove the line(s) the compiler complains about. The `EXPORT REPORT`/`SV*` variables are the most version-sensitive; see notes below. |
 
