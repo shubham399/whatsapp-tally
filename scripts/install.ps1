@@ -81,26 +81,25 @@ foreach ($regasm in $regasms) {
     if ($LASTEXITCODE -ne 0) { throw "regasm failed with exit code $LASTEXITCODE ($regasm)." }
 }
 
-# Confirm the registration actually landed.
-#
-# reg.exe is used on purpose: it reads the 32-bit and 64-bit registry views
-# explicitly (/reg:32, /reg:64). The PowerShell registry *provider* applies its
-# own view redirection, which made the previous version of this check report
-# "MISSING" for keys that regasm had just created.
-$progId  = "TallyWhatsappSender.WhatsAppSender"
-$classId = "9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f"   # [Guid] on the COM class
 
-function Invoke-Reg {
-    # Runs reg.exe and returns its stdout lines plus the exit code. reg writes
-    # "key not found" to stderr, and with $ErrorActionPreference = 'Stop' that
-    # would abort the whole script - so the preference is relaxed just here and
-    # the stderr records are dropped instead of being treated as failures.
-    param([string[]]$RegArgs)
+# === verify the install ======================================================
+# Registry keys turned out to be a poor check here: HKLM\SOFTWARE\Classes is a
+# shared key, so what a probe sees depends on the host process, and earlier
+# versions reported false "MISSING" results for keys regasm had just written.
+# What actually matters is what Tally does when it calls the add-on: create the
+# COM object. So do exactly that - once from a 64-bit PowerShell and once from a
+# 32-bit one - and report the exception if it fails.
 
+function Invoke-Native {
+    param([string]$Exe, [string[]]$Arguments)
+
+    # A native command writing to stderr becomes a terminating error while
+    # $ErrorActionPreference is 'Stop', so relax it for the call and let the
+    # exit code decide what happened.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & reg @RegArgs 2>&1
+        $output = & $Exe @Arguments 2>&1
         $code   = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
@@ -112,44 +111,11 @@ function Invoke-Reg {
     }
 }
 
-function Test-RegKey {
-    param([string]$Key, [string]$View)
-    return ((Invoke-Reg @("query", $Key, "/reg:$View")).ExitCode -eq 0)
-}
+# --- which architecture is the Tally executable? -----------------------------
+$tallyBits = $null
+$tallyExe  = Get-ChildItem $TallyDir -Filter "Tally*.exe" -ErrorAction SilentlyContinue |
+             Select-Object -First 1
 
-function Get-RegValue {
-    param([string]$Key, [string]$Name, [string]$View)
-    $result = Invoke-Reg @("query", $Key, "/v", $Name, "/reg:$View")
-    if ($result.ExitCode -ne 0) { return $null }
-    foreach ($line in $result.Lines) {
-        if ($line -match "^\s+$([regex]::Escape($Name))\s+REG_\w+\s+(.+)$") {
-            return $Matches[1].Trim()
-        }
-    }
-    return $null
-}
-
-$inprocKey = "HKLM\SOFTWARE\Classes\CLSID\$classId\InprocServer32"
-
-$allOk = $true
-foreach ($view in @("32", "64")) {
-    $progOk   = Test-RegKey "HKLM\SOFTWARE\Classes\$progId" $view
-    $clsidOk  = Test-RegKey $inprocKey $view
-    $codeBase = Get-RegValue $inprocKey "CodeBase" $view
-    if (-not ($progOk -and $clsidOk)) { $allOk = $false }
-
-    $label = "Registry view ($view-bit)"
-    $state = if ($progOk -and $clsidOk) { "OK" } else { "MISSING" }
-    $color = if ($progOk -and $clsidOk) { "Green" } else { "Yellow" }
-    Write-Host ("  {0,-24} {1,-4} ProgId={2}  CLSID={3}" -f $label, $state, $progOk, $clsidOk) -ForegroundColor $color
-    if ($codeBase) { Write-Host "      CodeBase: $codeBase" -ForegroundColor DarkGray }
-}
-
-# Report which architecture the Tally executable in $TallyDir is. The DLL is
-# AnyCPU, so either answer works - this is here so a support question about it
-# never needs a separate diagnostic run.
-$tallyExe = Get-ChildItem $TallyDir -Filter "Tally*.exe" -ErrorAction SilentlyContinue |
-            Select-Object -First 1
 if ($tallyExe) {
     try {
         $fs = [IO.File]::OpenRead($tallyExe.FullName)
@@ -159,24 +125,63 @@ if ($tallyExe) {
         $fs.Seek($peOffset + 4, 'Begin') | Out-Null
         $machine = $br.ReadUInt16()
         $br.Dispose(); $fs.Dispose()
-        $arch = switch ($machine) { 0x14c { "32-bit (x86)" } 0x8664 { "64-bit (x64)" } default { "unknown" } }
-        Write-Host "  Tally executable: $($tallyExe.FullName) -> $arch" -ForegroundColor Cyan
+        switch ($machine) {
+            0x14c  { $tallyBits = "32"; $arch = "32-bit (x86)" }
+            0x8664 { $tallyBits = "64"; $arch = "64-bit (x64)" }
+            default { $arch = ("unknown (0x{0:x4})" -f $machine) }
+        }
+        Write-Host "  Tally executable  : $($tallyExe.FullName) -> $arch" -ForegroundColor Cyan
     } catch {
-        Write-Host "  Tally executable: $($tallyExe.FullName) -> architecture not readable" -ForegroundColor Yellow
+        Write-Host "  Tally executable  : $($tallyExe.FullName) -> architecture not readable" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  No Tally*.exe found in $TallyDir" -ForegroundColor Yellow
+    Write-Host "  Tally executable  : no Tally*.exe in $TallyDir" -ForegroundColor Yellow
 }
 
-if ($allOk) {
-    Write-Host "COM registration OK in both registry views." -ForegroundColor Green
+# --- COM activation test, once per architecture ------------------------------
+$progId = "TallyWhatsappSender.WhatsAppSender"
+$probe  = "try { New-Object -ComObject '$progId' | Out-Null; 'OK' } catch { 'FAILED: ' + `$_.Exception.Message }"
+
+$ps32 = Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+$ps64 = if ([Environment]::Is64BitProcess) {
+    Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
 } else {
-    Write-Warning "A registry view is missing the registration - clients of that architecture cannot load the DLL."
+    # From a 32-bit host, System32 is redirected to SysWOW64; Sysnative is the
+    # alias that reaches the real System32.
+    Join-Path $env:WINDIR "Sysnative\WindowsPowerShell\v1.0\powershell.exe"
 }
 
-Write-Host ""
-Write-Host "Done." -ForegroundColor Green
-Write-Host "Next: in TallyPrime press F1 > TDLs & Add-Ons > F4, point to" -ForegroundColor Green
-Write-Host "      $(Join-Path $TdlDir 'WhatsAppSender.tdl')" -ForegroundColor Green
-Write-Host "and set 'Load selected TDL files on startup' to Yes." -ForegroundColor Green
-Write-Host "Then RESTART TallyPrime so it picks up the COM registration." -ForegroundColor Green
+$activation = [ordered]@{}
+foreach ($entry in @(@("64", $ps64), @("32", $ps32))) {
+    $bits  = $entry[0]
+    $psExe = $entry[1]
+
+    if (-not (Test-Path $psExe)) {
+        $activation[$bits] = "host not available"
+        continue
+    }
+
+    $run  = Invoke-Native $psExe @("-NoProfile", "-NonInteractive", "-Command", $probe)
+    $text = (($run.Lines -join " ") -replace '\s+', ' ').Trim()
+
+    if     ($text -match '^OK')                { $activation[$bits] = "OK" }
+    elseif ($text -match 'FAILED:\s*(.*)')     { $activation[$bits] = "FAILED - " + $Matches[1].Trim() }
+    else                                       { $activation[$bits] = "FAILED (no output, exit $($run.ExitCode))" }
+}
+
+foreach ($bits in $activation.Keys) {
+    $isOk  = ($activation[$bits] -eq "OK")
+    $color = if ($isOk) { "Green" } else { "Yellow" }
+    Write-Host ("  COM activation ({0}-bit) : {1}" -f $bits, $activation[$bits]) -ForegroundColor $color
+}
+
+# Success is judged on the architecture Tally actually runs as - the other view
+# is only a safety net.
+$status = if ($tallyBits) { $activation[$tallyBits] } else { $null }
+if ($status -eq "OK") {
+    Write-Host "COM registration OK for the architecture Tally uses ($tallyBits-bit)." -ForegroundColor Green
+} elseif (-not $tallyBits -and (($activation.Values) -contains "OK")) {
+    Write-Host "COM registration OK (Tally's architecture could not be determined)." -ForegroundColor Green
+} else {
+    Write-Warning "COM activation failed for the architecture Tally uses - Tally will not be able to call the add-on."
+}

@@ -131,16 +131,20 @@ so `regasm` does not print the *"Registering an unsigned assembly with
 /codebase"* warning (`RA0000`). That warning is only advisory and never caused
 registration to fail — signing does not affect whether Tally can load the class.
 
-The verification report looks like this:
+The verification report creates the COM object the same way Tally does — once
+from a 64-bit PowerShell and once from a 32-bit one — because the success or
+failure of a registry-key check depends on which view the probing process sees:
 
 ```
-  Registry view (32-bit)   OK   ProgId=True  CLSID=True
-      CodeBase: C:\Program Files\TallyPrime\TallyWhatsappSender.dll
-  Registry view (64-bit)   OK   ProgId=True  CLSID=True
-      CodeBase: C:\Program Files\TallyPrime\TallyWhatsappSender.dll
-  Tally executable: C:\Program Files\TallyPrime\Tally.exe -> 32-bit (x86)
-COM registration OK in both registry views.
+  Tally executable  : C:\Program Files\TallyPrime\Tally.exe -> 64-bit (x64)
+  COM activation (64-bit) : OK
+  COM activation (32-bit) : OK
+COM registration OK for the architecture Tally uses (64-bit).
 ```
+
+If activation fails, the message is the exact COM error (for example
+`80040154 Class not registered`), and it is reported against the architecture
+your Tally executable actually uses.
 
 Then load the TDL in Tally:
 
@@ -224,7 +228,7 @@ Notes:
 | Symptom | Fix |
 | --- | --- |
 | Tally reports the COM call failed, or nothing happens on save | Re-run `scripts/install.ps1` (it self-elevates, registers **both** registry views and prints `COM registration OK`), then **restart TallyPrime**. The TDL now calls the COM interface directly and shows Tally's own error instead of a generic "not available" message. |
-| Not sure if registration took | `scripts/install.ps1` ends with a per-view report (`Registry view (32-bit) OK ProgId=True CLSID=True`, the `CodeBase` path, and the architecture of the Tally executable it found). If a view says `MISSING`, the DLL could not be loaded by a client of that architecture. |
+| Not sure if registration took | `scripts/install.ps1` ends by creating the COM object from both a 64-bit and a 32-bit PowerShell and printing `COM activation (64-bit) : OK` / `COM activation (32-bit) : OK`, plus the architecture of your Tally executable. A failure prints the raw COM error under the architecture Tally uses. Registry-key checks are not used: whether they pass depends on the probing process's view. |
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
 | *"Could not load file or assembly 'System.Text.Json, Version=8.0.0.0' … 0x80131040"* | The DLL ships `System.Text.Json` 8.0.4, whose assembly version is 8.0.0.4, while Selenium asks for 8.0.0.0. Tally.exe owns the config file, so no binding redirect can be added; versions before 1.0.6 therefore failed. Update to 1.0.6 or later, which resolves the reference from the DLL's own folder (`AssemblyResolve` in `WhatsAppSender.cs`). |
