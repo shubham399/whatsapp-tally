@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -209,7 +210,8 @@ namespace TallyWhatsappSender
                 Log(log, "chrome   = " + chromeBinary);
                 Log(log, "process  = " + (Environment.Is64BitProcess ? "64-bit" : "32-bit") +
                          ", CLR " + Environment.Version);
-                Log(log, "basedir  = " + AppDomain.CurrentDomain.BaseDirectory);
+                Log(log, "basedir  = " + InstallDirectory());
+                Log(log, "host dir = " + AppDomain.CurrentDomain.BaseDirectory);
 
                 if (string.IsNullOrWhiteSpace(pdfPath))
                 {
@@ -237,15 +239,19 @@ namespace TallyWhatsappSender
                            "Please enter a 10-digit mobile number in the party ledger.";
                 }
 
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                // Resolve everything from the folder that holds this DLL, not
+                // from AppDomain.BaseDirectory. When the add-on is called from
+                // Tally the two are the same, but the self-test runs inside
+                // powershell.exe, whose base directory has none of our files.
+                string baseDir = InstallDirectory();
                 string driverExe = Path.Combine(baseDir, "chromedriver.exe");
 
                 ChromeOptions options = BuildChromeOptions(chromeBinary);
                 Log(log, "profile   = " + ProfileDirectory());
-                Log(log, "driver    = " + (File.Exists(driverExe) ? driverExe : "none, using Selenium Manager"));
+                Log(log, "driver    = " + (File.Exists(driverExe) ? driverExe : "none, asking Selenium Manager"));
                 Log(log, "starting Chrome ...");
 
-                driver = CreateDriver(baseDir, driverExe, options);
+                driver = CreateDriver(baseDir, driverExe, options, log);
                 Log(log, "Chrome started, browser version = " + SafeBrowserVersion(driver));
 
                 if (!EnsureLoggedIn(driver, log))
@@ -370,6 +376,10 @@ namespace TallyWhatsappSender
             catch (Exception ex)
             {
                 Log(log, "ERROR " + ex.GetType().Name + ": " + ex.Message);
+                for (Exception inner = ex.InnerException; inner != null; inner = inner.InnerException)
+                {
+                    Log(log, "  caused by " + inner.GetType().Name + ": " + inner.Message);
+                }
                 if (!string.IsNullOrEmpty(ex.StackTrace))
                 {
                     Log(log, ex.StackTrace);
@@ -426,7 +436,8 @@ namespace TallyWhatsappSender
             catch { return "unknown"; }
         }
 
-        private static IWebDriver CreateDriver(string baseDir, string driverExe, ChromeOptions options)
+        private static IWebDriver CreateDriver(string baseDir, string driverExe, ChromeOptions options,
+                                                StringBuilder log)
         {
             if (File.Exists(driverExe))
             {
@@ -439,30 +450,177 @@ namespace TallyWhatsappSender
                 }
                 catch (Exception ex)
                 {
-                    throw new InvalidOperationException(
-                        "Chrome did not start with the bundled driver (" + driverExe + "): " + ex.Message +
-                        " Delete that file so the matching driver can be downloaded automatically.", ex);
+                    // A stale driver (Chrome updated) is the usual reason. Fall
+                    // through to Selenium Manager instead of giving up.
+                    Log(log, "bundled driver failed: " + RootMessage(ex));
                 }
             }
 
-            string manager = Path.Combine(baseDir, "selenium-manager", "windows", "selenium-manager.exe");
+            // Ask the bundled selenium-manager.exe directly. Selenium's
+            // SeleniumManager wrapper locates the binary through
+            // AppContext.BaseDirectory, which inside powershell.exe (or any
+            // host other than Tally) points at the host's folder - that is why
+            // the wrapper failed with a type-initializer exception. Running the
+            // executable ourselves and using the driver path it prints works
+            // no matter which process loaded this DLL.
+            string managerExe = FindSeleniumManager(baseDir);
+            if (managerExe != null)
+            {
+                string managedDriver = RunSeleniumManager(managerExe, log);
+                if (!string.IsNullOrEmpty(managedDriver) && File.Exists(managedDriver))
+                {
+                    try
+                    {
+                        ChromeDriverService service = ChromeDriverService.CreateDefaultService(
+                            Path.GetDirectoryName(managedDriver), Path.GetFileName(managedDriver));
+                        service.HideCommandPromptWindow = true;
+                        return new ChromeDriver(service, options, TimeSpan.FromSeconds(LoginTimeoutSeconds));
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            "Chrome did not start with the driver reported by Selenium Manager (" +
+                            managedDriver + "): " + RootMessage(ex), ex);
+                    }
+                }
+            }
+
+            // Last resort: Selenium's own manager. It only works when the host's
+            // base directory happens to contain the selenium-manager folder, but
+            // try it so nothing is lost.
             try
             {
-                // No local chromedriver.exe: let Selenium Manager (Selenium 4)
-                // find or download a matching driver.
                 return new ChromeDriver(options);
             }
             catch (Exception ex)
             {
-                string hint = File.Exists(manager)
+                string hint = managerExe != null
                     ? ""
-                    : " The Selenium driver manager is missing too (expected at " + manager + ").";
+                    : " The bundled Selenium driver manager was not found under " + baseDir + ".";
                 throw new InvalidOperationException(
-                    "Chrome did not start. No chromedriver.exe sits next to the DLL, so Selenium Manager " +
-                    "has to download a driver that matches Google Chrome." + hint +
-                    " Check that Chrome is installed and that this machine has internet access for the " +
-                    "one-time download. Original error: " + ex.Message, ex);
+                    "Chrome did not start. No chromedriver.exe sits next to the DLL and the bundled " +
+                    "Selenium Manager could not provide one." + hint +
+                    " Check that Google Chrome is installed and that this machine has internet access " +
+                    "for the one-time driver download. Original error: " + RootMessage(ex), ex);
             }
+        }
+
+        private static string FindSeleniumManager(string baseDir)
+        {
+            string[] candidates =
+            {
+                Path.Combine(baseDir, "selenium-manager", "windows", "selenium-manager.exe"),
+                Path.Combine(baseDir, "selenium-manager", "selenium-manager.exe")
+            };
+
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate)) return candidate;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Runs selenium-manager.exe and returns the driver path it reports, or
+        /// null. The tool caches the driver and re-downloads only when Chrome has
+        /// moved to a new version, so this also survives Chrome updates.
+        /// </summary>
+        private static string RunSeleniumManager(string managerExe, StringBuilder log)
+        {
+            try
+            {
+                var start = new ProcessStartInfo
+                {
+                    FileName = managerExe,
+                    Arguments = "--browser chrome --avoid-browser-download --output json",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                Log(log, "selenium-manager = " + managerExe);
+
+                using (Process process = Process.Start(start))
+                {
+                    // Read both streams asynchronously: reading one to the end
+                    // while the other fills its buffer can deadlock.
+                    System.Threading.Tasks.Task<string> outTask = process.StandardOutput.ReadToEndAsync();
+                    System.Threading.Tasks.Task<string> errTask = process.StandardError.ReadToEndAsync();
+
+                    if (!process.WaitForExit(120000))
+                    {
+                        try { process.Kill(); } catch { }
+                        Log(log, "selenium-manager timed out");
+                        return null;
+                    }
+
+                    string stdout = outTask.Result;
+                    string stderr = errTask.Result;
+
+                    Log(log, "selenium-manager exit = " + process.ExitCode);
+                    if (!string.IsNullOrEmpty(stdout)) Log(log, "selenium-manager out: " + Shorten(stdout, 600));
+                    if (!string.IsNullOrEmpty(stderr)) Log(log, "selenium-manager err: " + Shorten(stderr, 600));
+
+                    string driverPath = ExtractJsonString(stdout, "driver_path");
+                    if (!string.IsNullOrEmpty(driverPath))
+                        Log(log, "Selenium Manager driver = " + driverPath);
+                    return driverPath;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log(log, "selenium-manager failed: " + RootMessage(ex));
+                return null;
+            }
+        }
+
+        private static string ExtractJsonString(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try
+            {
+                Match match = Regex.Match(
+                    json,
+                    "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+                if (!match.Success) return null;
+
+                // JSON escapes backslashes in the Windows path.
+                return Regex.Unescape(match.Groups[1].Value);
+            }
+            catch { return null; }
+        }
+
+        private static string InstallDirectory()
+        {
+            try
+            {
+                string location = typeof(WhatsAppSender).Assembly.Location;
+                if (!string.IsNullOrEmpty(location))
+                {
+                    string folder = Path.GetDirectoryName(location);
+                    if (!string.IsNullOrEmpty(folder)) return folder;
+                }
+            }
+            catch { }
+
+            return AppDomain.CurrentDomain.BaseDirectory;
+        }
+
+        /// <summary>
+        /// The message of the innermost exception: that is where the useful
+        /// detail is (missing assembly, driver error, and so on).
+        /// </summary>
+        private static string RootMessage(Exception ex)
+        {
+            while (ex.InnerException != null) ex = ex.InnerException;
+            return ex.GetType().Name + ": " + ex.Message;
+        }
+
+        private static string Shorten(string text, int max)
+        {
+            text = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            return text.Length <= max ? text : text.Substring(0, max) + "...";
         }
 
         /// <summary>
