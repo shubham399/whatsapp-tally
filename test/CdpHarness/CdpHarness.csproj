@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CdpHarness</AssemblyName>
+    <RootNamespace>CdpHarness</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same two source files the net48 add-on uses. They deliberately
+         depend only on the base class library, which is what makes this test
+         possible on Linux. -->
+    <Compile Include="..\..\src\TallyWhatsappSender\Cdp.cs" />
+    <Compile Include="..\..\src\TallyWhatsappSender\WhatsAppAutomation.cs" />
+  </ItemGroup>
+
+</Project>

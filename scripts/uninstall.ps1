@@ -48,15 +48,58 @@ if (Test-Path $dll) {
         }
     }
     Remove-Item $dll -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $TallyDir "WebDriver.dll") -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $TallyDir "selenium-manager") -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "Note: the Selenium dependency DLLs (System.*.dll) were left in place." -ForegroundColor Yellow
+    Remove-Item (Join-Path $TallyDir "TallyWhatsappSender.pdb") -Force -ErrorAction SilentlyContinue
+}
+
+# Remove the leftovers of the Selenium based versions (up to 1.0.13). They are
+# not used by 1.1.0 and only risk being picked up by Tally's own loader.
+$legacyFiles = @(
+    "Selenium.WebDriver.dll",
+    "WebDriver.dll",
+    "chromedriver.exe",
+    "System.Text.Json.dll",
+    "System.Text.Encodings.Web.dll",
+    "System.Threading.Tasks.Extensions.dll",
+    "System.ValueTuple.dll",
+    "System.Runtime.CompilerServices.Unsafe.dll",
+    "System.Buffers.dll",
+    "System.Memory.dll",
+    "System.Numerics.Vectors.dll"
+)
+
+$removed = @()
+foreach ($name in $legacyFiles) {
+    $path = Join-Path $TallyDir $name
+    if (Test-Path $path) {
+        Remove-Item $path -Force -ErrorAction SilentlyContinue
+        $removed += $name
+    }
+}
+
+$driverCache = Join-Path $TallyDir "selenium-manager"
+if (Test-Path $driverCache) {
+    Remove-Item $driverCache -Recurse -Force -ErrorAction SilentlyContinue
+    $removed += "selenium-manager\"
+}
+
+if ($removed.Count -gt 0) {
+    Write-Host ("Removed old Selenium files: " + ($removed -join ", ")) -ForegroundColor Cyan
 }
 
 $tdl = Join-Path $TdlDir "WhatsAppSender.tdl"
 if (Test-Path $tdl) {
     Remove-Item $tdl -Force -ErrorAction SilentlyContinue
     Write-Host "Removed $tdl" -ForegroundColor Cyan
+}
+
+# The Chrome profile is deliberately left alone: it holds the WhatsApp Web
+# login, which belongs to the user and is expensive to recreate (a new QR scan).
+$profileDir = Join-Path $env:LOCALAPPDATA "TallyWhatsAppSender\chrome-profile"
+if (Test-Path $profileDir) {
+    Write-Host ""
+    Write-Host "The WhatsApp login was kept in:" -ForegroundColor Yellow
+    Write-Host "  $profileDir"
+    Write-Host "Delete that folder (and %LOCALAPPDATA%\TallyWhatsAppSender\log.txt) to remove it completely."
 }
 
 Write-Host "Done." -ForegroundColor Green

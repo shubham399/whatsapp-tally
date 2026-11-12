@@ -1,17 +1,22 @@
 # Installs the add-on:
-#   1. copies the built DLLs into the Tally working folder,
-#   2. copies the TDL into the TDL folder,
-#   3. creates the PDF output folder,
-#   4. registers the COM DLL with BOTH the 32-bit and 64-bit regasm.
+#   1. removes files left behind by older (Selenium based) versions,
+#   2. copies TallyWhatsappSender.dll next to Tally.exe,
+#   3. copies the TDL into the TDL folder,
+#   4. creates the PDF output folder,
+#   5. registers the COM DLL with BOTH the 32-bit and 64-bit regasm,
+#   6. opens the WhatsApp QR login step in a normal (non-admin) window.
 #
 # Run it from any PowerShell window; it self-elevates (UAC prompt):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+#
+# Add -SkipLogin to leave the QR login for later:
+#   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -SkipLogin
 
 param(
     [string]$TallyDir  = "C:\Program Files\TallyPrime",
     [string]$TdlDir    = "C:\Users\Admin\OneDrive\TDL",
     [string]$OutputDir = "C:\Users\Admin\OneDrive\Export",
-    [string]$ChromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+    [switch]$SkipLogin
 )
 
 # --- self-elevate -----------------------------------------------------------
@@ -25,7 +30,12 @@ if (-not $isAdmin) {
     $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
     $argString  = "-NoProfile -NoExit -ExecutionPolicy Bypass -File `"$scriptPath`""
     foreach ($k in $PSBoundParameters.Keys) {
-        $argString += " -$k `"$($PSBoundParameters[$k])`""
+        $value = $PSBoundParameters[$k]
+        if ($value -is [switch]) {
+            if ($value.IsPresent) { $argString += " -$k" }
+        } else {
+            $argString += " -$k `"$value`""
+        }
     }
     try {
         Start-Process powershell -Verb RunAs -ArgumentList $argString -ErrorAction Stop
@@ -51,103 +61,80 @@ if (Get-Process -Name "Tally" -ErrorAction SilentlyContinue) {
     throw "TallyPrime is running. Close it, then run the installer again so the DLLs next to Tally.exe can be replaced."
 }
 
+function Resolve-Chrome {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    $registered = Get-ItemProperty `
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe' `
+        -ErrorAction SilentlyContinue
+    if ($registered) { $candidates.Add($registered.'(default)') }
+
+    foreach ($variable in @("ProgramFiles", "ProgramFiles(x86)", "LocalAppData")) {
+        $root = [Environment]::GetEnvironmentVariable($variable)
+        if ($root) { $candidates.Add((Join-Path $root "Google\Chrome\Application\chrome.exe")) }
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) { return (Resolve-Path $candidate).Path }
+    }
+
+    return $null
+}
+
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 New-Item -ItemType Directory -Force -Path $TdlDir    | Out-Null
 
-Write-Host "Copying build output to $TallyDir ..." -ForegroundColor Cyan
-# Everything (TallyWhatsappSender.dll, WebDriver.dll, the Selenium
-# dependencies and the selenium-manager folder) must sit next to TallyPrime.exe.
-Copy-Item (Join-Path $build "*") $TallyDir -Recurse -Force
+# === remove what older versions installed ===================================
+# Up to 1.0.13 the add-on used Selenium and copied a driver plus a pile of
+# System.*.dll files next to Tally.exe. 1.1.0 talks to Chrome over DevTools and
+# has no dependencies at all, so those files are dead weight - and worse, Tally
+# can end up loading a stale copy of System.Text.Json instead of its own.
+$legacyFiles = @(
+    "Selenium.WebDriver.dll",
+    "WebDriver.dll",
+    "chromedriver.exe",
+    "System.Text.Json.dll",
+    "System.Text.Encodings.Web.dll",
+    "System.Threading.Tasks.Extensions.dll",
+    "System.ValueTuple.dll",
+    "System.Runtime.CompilerServices.Unsafe.dll",
+    "System.Buffers.dll",
+    "System.Memory.dll",
+    "System.Numerics.Vectors.dll"
+)
 
-# Selenium's client library does not ship a driver that matches modern Chrome,
-# and relying on its downloader from inside Tally is fragile. Fetch the matching
-# chromedriver from the Chrome for Testing index once, here, where we are
-# elevated and can write next to Tally.exe.
-function Install-ChromeDriver {
-    param([string]$ChromePath, [string]$Destination)
-
-    try {
-        if (-not (Test-Path $ChromePath)) {
-            $candidates = @(
-                (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe' -ErrorAction SilentlyContinue).'(default)',
-                (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
-                (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe')
-            ) | Where-Object { $_ -and (Test-Path $_) }
-            $ChromePath = $candidates | Select-Object -First 1
-        }
-        if (-not $ChromePath -or -not (Test-Path $ChromePath)) {
-            Write-Warning "Google Chrome was not found; skipping the driver download."
-            return
-        }
-
-        $fullVersion = (Get-Item $ChromePath).VersionInfo.ProductVersion -replace '\s.*$', ''
-        $major = ($fullVersion -split '\.')[0]
-        Write-Host "Google Chrome $fullVersion detected - finding a matching chromedriver ..." -ForegroundColor Cyan
-
-        # Chrome and its driver must have the same major version. Chrome for
-        # Testing publishes one build per Chrome release for win64/win32.
-        $platform = "win64"
-        try {
-            $fs = [IO.File]::OpenRead($ChromePath)
-            $br = New-Object IO.BinaryReader($fs)
-            $fs.Seek(0x3C, 'Begin') | Out-Null
-            $peOffset = $br.ReadInt32()
-            $fs.Seek($peOffset + 4, 'Begin') | Out-Null
-            $machine = $br.ReadUInt16()
-            $br.Dispose(); $fs.Dispose()
-            if ($machine -eq 0x14c) { $platform = "win32" }
-        } catch {
-            if (-not [Environment]::Is64BitOperatingSystem) { $platform = "win32" }
-        }
-
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $indexUrl = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
-        $index = Invoke-RestMethod -Uri $indexUrl -UseBasicParsing -TimeoutSec 60
-
-        $entry = $index.versions | Where-Object { $_.version -eq $fullVersion } | Select-Object -First 1
-        if (-not $entry) {
-            # Chrome's exact build may not be in the list; the same major works.
-            $entry = $index.versions |
-                     Where-Object { ($_.version -split '\.')[0] -eq $major } |
-                     Select-Object -Last 1
-        }
-        if (-not $entry) {
-            Write-Warning "No chromedriver release was found for Chrome $fullVersion."
-            return
-        }
-
-        $download = $entry.downloads.chromedriver |
-                    Where-Object { $_.platform -eq $platform } |
-                    Select-Object -First 1
-        if (-not $download) {
-            Write-Warning "No $platform chromedriver download exists for Chrome $($entry.version)."
-            return
-        }
-
-        $zip     = Join-Path $env:TEMP "chromedriver-$($entry.version)-$platform.zip"
-        $extract = Join-Path $env:TEMP "chromedriver-$($entry.version)-$platform"
-        Write-Host "Downloading $($download.url) ..." -ForegroundColor Cyan
-        Invoke-WebRequest -Uri $download.url -OutFile $zip -UseBasicParsing -TimeoutSec 120
-
-        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-        Expand-Archive -Path $zip -DestinationPath $extract -Force
-        $exe = Get-ChildItem -Path $extract -Recurse -Filter chromedriver.exe | Select-Object -First 1
-        if (-not $exe) { throw "chromedriver.exe was not found inside the downloaded zip." }
-
-        Copy-Item $exe.FullName (Join-Path $Destination "chromedriver.exe") -Force
-        Write-Host "Installed chromedriver $($entry.version) ($platform) next to Tally.exe." -ForegroundColor Green
-    } catch {
-        Write-Warning ("Could not download chromedriver automatically: " + $_.Exception.Message +
-                       " The add-on will try Selenium Manager and any cached driver instead.")
+$removed = @()
+foreach ($name in $legacyFiles) {
+    $path = Join-Path $TallyDir $name
+    if (Test-Path $path) {
+        Remove-Item $path -Force -ErrorAction SilentlyContinue
+        $removed += $name
     }
 }
 
-Install-ChromeDriver -ChromePath $ChromeExe -Destination $TallyDir
+$driverCache = Join-Path $TallyDir "selenium-manager"
+if (Test-Path $driverCache) {
+    Remove-Item $driverCache -Recurse -Force -ErrorAction SilentlyContinue
+    $removed += "selenium-manager\"
+}
+
+if ($removed.Count -gt 0) {
+    Write-Host ("Removed old Selenium files: " + ($removed -join ", ")) -ForegroundColor Yellow
+}
+
+# === copy the add-on ========================================================
+Write-Host "Copying the add-on to $TallyDir ..." -ForegroundColor Cyan
+Copy-Item $dll $TallyDir -Force
+
+# The .pdb is optional; it only makes an exception's line numbers readable.
+$pdb = Join-Path $build "TallyWhatsappSender.pdb"
+if (Test-Path $pdb) { Copy-Item $pdb $TallyDir -Force }
 
 # Copy the TDL into the TDL folder; this is the file you load in Tally.
 Write-Host "Copying TDL to $TdlDir ..." -ForegroundColor Cyan
 Copy-Item (Join-Path $root "TDL\WhatsAppSender.tdl") $TdlDir -Force
 
+# === register COM ===========================================================
 # Register the copy that now lives in the Tally folder (NOT the build output),
 # so the /codebase path points next to TallyPrime.exe and survives the build
 # folder being moved or deleted.
@@ -289,3 +276,60 @@ if ($status -eq "OK") {
 } else {
     Write-Warning "COM activation failed for the architecture Tally uses - Tally will not be able to call the add-on."
 }
+
+# === Chrome =================================================================
+$chrome = Resolve-Chrome
+if ($chrome) {
+    Write-Host "  Google Chrome     : $chrome" -ForegroundColor Cyan
+} else {
+    Write-Warning ("Google Chrome was not found. The add-on needs Chrome for WhatsApp Web. " +
+                   "Install it, then run scripts\login.ps1.")
+}
+
+# === WhatsApp login =========================================================
+# Chrome refuses to run elevated, and this script is elevated, so the login
+# helper is started through explorer.exe, which launches it as the logged-on
+# user. It opens the add-on's own Chrome profile and waits for the QR scan.
+if ($SkipLogin) {
+    Write-Host ""
+    Write-Host "Skipping the WhatsApp login step (-SkipLogin). Run scripts\login.ps1 when ready."
+} elseif (-not $chrome) {
+    Write-Host ""
+    Write-Host "After installing Chrome, run scripts\login.ps1 to link WhatsApp."
+} else {
+    $login = Join-Path $PSScriptRoot "login.ps1"
+    if (-not (Test-Path $login)) {
+        Write-Warning "login.ps1 was not found next to install.ps1. Run it from the repository folder."
+    } else {
+        Write-Host ""
+        Write-Host "Starting the WhatsApp login step in a normal (non-admin) window ..." -ForegroundColor Cyan
+        Write-Host "Scan the QR code with your phone: WhatsApp > Settings > Linked devices > Link a device."
+
+        $cmdPath = Join-Path $env:TEMP "tally-whatsapp-login.cmd"
+        $lines = @(
+            "@echo off"
+            "title WhatsApp login for Tally"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File `"$login`""
+            "echo."
+            "pause"
+        )
+        Set-Content -Path $cmdPath -Value ($lines -join "`r`n") -Encoding ASCII
+
+        try {
+            Start-Process -FilePath "explorer.exe" -ArgumentList "`"$cmdPath`"" -ErrorAction Stop
+        } catch {
+            Write-Warning ("Could not open the login window automatically: " + $_.Exception.Message)
+            Write-Host "Run it yourself in a normal PowerShell window:"
+            Write-Host "  powershell -ExecutionPolicy Bypass -File `"$login`""
+        }
+    }
+}
+
+# === next steps =============================================================
+Write-Host ""
+Write-Host "Next steps:" -ForegroundColor White
+Write-Host "  1. Load the TDL in Tally: F1 > TDLs & Add-Ons > F4 (Manage Local TDLs),"
+Write-Host "     enable 'Load selected TDL files on startup' and add"
+Write-Host "     $TdlDir\WhatsAppSender.tdl"
+Write-Host "  2. Restart TallyPrime so it picks up the COM registration."
+Write-Host "  3. Save a Sales voucher; the QR login is already handled by step 6."

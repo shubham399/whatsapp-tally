@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WhatsApp mock</title>
+<style>
+  body { margin: 0; font-family: sans-serif; height: 100vh; }
+  #app { display: flex; height: 100vh; }
+  #pane-side { width: 30%; border-right: 1px solid #ccc; padding: 8px; }
+  #main { flex: 1; display: flex; flex-direction: column; }
+  #history { flex: 1; overflow: auto; padding: 8px; }
+  footer { padding: 8px; border-top: 1px solid #ccc; }
+  .compose { min-height: 40px; border: 1px solid #999; padding: 4px; }
+  #preview { border: 1px solid #0a0; padding: 8px; margin: 8px; }
+  .caption { min-height: 32px; border: 1px dashed #999; margin: 4px 0; }
+  .message-out { text-align: right; margin: 4px; }
+  .message-out span { display: inline-block; background: #dcf8c6; padding: 4px; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="pane-side">Chats</div>
+  <div id="main">
+    <div id="history"></div>
+    <div id="preview" style="display:none">
+      <div class="caption" contenteditable="true" aria-label="Add a caption"></div>
+      <button aria-label="Send" id="send"><span data-icon="send">Send</span></button>
+    </div>
+    <footer>
+      <div role="button" aria-label="Attach" id="attach"><span data-icon="plus">+</span></div>
+      <div class="compose" contenteditable="true" role="textbox"></div>
+    </footer>
+  </div>
+</div>
+
+<script>
+  var preview = document.getElementById('preview');
+  var historyEl = document.getElementById('history');
+  window.__clicks = { attach: 0, send: 0 };
+
+  document.getElementById('attach').addEventListener('click', function () {
+    window.__clicks.attach++;
+    if (document.querySelector('input[type=file]')) return;
+
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/pdf,.pdf';
+    input.addEventListener('change', function () {
+      if (!input.files || !input.files.length) return;
+      preview.setAttribute('data-file', input.files[0].name);
+      preview.style.display = 'block';
+    });
+    document.body.appendChild(input);
+  });
+
+  document.getElementById('send').addEventListener('click', function () {
+    window.__clicks.send++;
+    var caption = preview.querySelector('.caption');
+    var name = preview.getAttribute('data-file') || 'unknown.pdf';
+
+    var bubble = document.createElement('div');
+    bubble.className = 'message-out';
+
+    var doc = document.createElement('span');
+    doc.className = 'doc';
+    doc.textContent = name.replace(/\.[^.]+$/, '');
+
+    var cap = document.createElement('span');
+    cap.className = 'cap';
+    cap.textContent = (caption.innerText || caption.textContent || '').trim();
+
+    bubble.appendChild(doc);
+    bubble.appendChild(document.createTextNode(' '));
+    bubble.appendChild(cap);
+    historyEl.appendChild(bubble);
+
+    preview.style.display = 'none';
+    preview.removeAttribute('data-file');
+    caption.textContent = '';
+  });
+</script>
+</body>
+</html>
