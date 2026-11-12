@@ -10,7 +10,8 @@
 param(
     [string]$TallyDir  = "C:\Program Files\TallyPrime",
     [string]$TdlDir    = "C:\Users\Admin\OneDrive\TDL",
-    [string]$OutputDir = "C:\Users\Admin\OneDrive\Export"
+    [string]$OutputDir = "C:\Users\Admin\OneDrive\Export",
+    [string]$ChromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 )
 
 # --- self-elevate -----------------------------------------------------------
@@ -44,6 +45,12 @@ $dll   = Join-Path $build "TallyWhatsappSender.dll"
 if (-not (Test-Path $dll))   { throw "Build first - '$dll' not found. Run scripts\build.ps1." }
 if (-not (Test-Path $TallyDir)) { throw "Tally folder not found: '$TallyDir'. Pass the correct -TallyDir." }
 
+# Copying over a running Tally fails (loaded DLLs are locked) and can leave a
+# half-updated installation. Ask for a restart instead.
+if (Get-Process -Name "Tally" -ErrorAction SilentlyContinue) {
+    throw "TallyPrime is running. Close it, then run the installer again so the DLLs next to Tally.exe can be replaced."
+}
+
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 New-Item -ItemType Directory -Force -Path $TdlDir    | Out-Null
 
@@ -51,6 +58,91 @@ Write-Host "Copying build output to $TallyDir ..." -ForegroundColor Cyan
 # Everything (TallyWhatsappSender.dll, WebDriver.dll, the Selenium
 # dependencies and the selenium-manager folder) must sit next to TallyPrime.exe.
 Copy-Item (Join-Path $build "*") $TallyDir -Recurse -Force
+
+# Selenium's client library does not ship a driver that matches modern Chrome,
+# and relying on its downloader from inside Tally is fragile. Fetch the matching
+# chromedriver from the Chrome for Testing index once, here, where we are
+# elevated and can write next to Tally.exe.
+function Install-ChromeDriver {
+    param([string]$ChromePath, [string]$Destination)
+
+    try {
+        if (-not (Test-Path $ChromePath)) {
+            $candidates = @(
+                (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe' -ErrorAction SilentlyContinue).'(default)',
+                (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+                (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe')
+            ) | Where-Object { $_ -and (Test-Path $_) }
+            $ChromePath = $candidates | Select-Object -First 1
+        }
+        if (-not $ChromePath -or -not (Test-Path $ChromePath)) {
+            Write-Warning "Google Chrome was not found; skipping the driver download."
+            return
+        }
+
+        $fullVersion = (Get-Item $ChromePath).VersionInfo.ProductVersion -replace '\s.*$', ''
+        $major = ($fullVersion -split '\.')[0]
+        Write-Host "Google Chrome $fullVersion detected - finding a matching chromedriver ..." -ForegroundColor Cyan
+
+        # Chrome and its driver must have the same major version. Chrome for
+        # Testing publishes one build per Chrome release for win64/win32.
+        $platform = "win64"
+        try {
+            $fs = [IO.File]::OpenRead($ChromePath)
+            $br = New-Object IO.BinaryReader($fs)
+            $fs.Seek(0x3C, 'Begin') | Out-Null
+            $peOffset = $br.ReadInt32()
+            $fs.Seek($peOffset + 4, 'Begin') | Out-Null
+            $machine = $br.ReadUInt16()
+            $br.Dispose(); $fs.Dispose()
+            if ($machine -eq 0x14c) { $platform = "win32" }
+        } catch {
+            if (-not [Environment]::Is64BitOperatingSystem) { $platform = "win32" }
+        }
+
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $indexUrl = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
+        $index = Invoke-RestMethod -Uri $indexUrl -UseBasicParsing -TimeoutSec 60
+
+        $entry = $index.versions | Where-Object { $_.version -eq $fullVersion } | Select-Object -First 1
+        if (-not $entry) {
+            # Chrome's exact build may not be in the list; the same major works.
+            $entry = $index.versions |
+                     Where-Object { ($_.version -split '\.')[0] -eq $major } |
+                     Select-Object -Last 1
+        }
+        if (-not $entry) {
+            Write-Warning "No chromedriver release was found for Chrome $fullVersion."
+            return
+        }
+
+        $download = $entry.downloads.chromedriver |
+                    Where-Object { $_.platform -eq $platform } |
+                    Select-Object -First 1
+        if (-not $download) {
+            Write-Warning "No $platform chromedriver download exists for Chrome $($entry.version)."
+            return
+        }
+
+        $zip     = Join-Path $env:TEMP "chromedriver-$($entry.version)-$platform.zip"
+        $extract = Join-Path $env:TEMP "chromedriver-$($entry.version)-$platform"
+        Write-Host "Downloading $($download.url) ..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $download.url -OutFile $zip -UseBasicParsing -TimeoutSec 120
+
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        Expand-Archive -Path $zip -DestinationPath $extract -Force
+        $exe = Get-ChildItem -Path $extract -Recurse -Filter chromedriver.exe | Select-Object -First 1
+        if (-not $exe) { throw "chromedriver.exe was not found inside the downloaded zip." }
+
+        Copy-Item $exe.FullName (Join-Path $Destination "chromedriver.exe") -Force
+        Write-Host "Installed chromedriver $($entry.version) ($platform) next to Tally.exe." -ForegroundColor Green
+    } catch {
+        Write-Warning ("Could not download chromedriver automatically: " + $_.Exception.Message +
+                       " The add-on will try Selenium Manager and any cached driver instead.")
+    }
+}
+
+Install-ChromeDriver -ChromePath $ChromeExe -Destination $TallyDir
 
 # Copy the TDL into the TDL folder; this is the file you load in Tally.
 Write-Host "Copying TDL to $TdlDir ..." -ForegroundColor Cyan

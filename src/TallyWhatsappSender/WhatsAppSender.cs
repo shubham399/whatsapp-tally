@@ -441,18 +441,18 @@ namespace TallyWhatsappSender
         {
             if (File.Exists(driverExe))
             {
-                try
+                IWebDriver created = TryStartChrome(driverExe, options, log);
+                if (created != null) return created;
+                Log(log, "the bundled driver did not work - trying a cached Selenium driver");
+            }
+
+            foreach (string cached in CachedDriverPaths())
+            {
+                IWebDriver created = TryStartChrome(cached, options, log);
+                if (created != null)
                 {
-                    ChromeDriverService service =
-                        ChromeDriverService.CreateDefaultService(baseDir, "chromedriver.exe");
-                    service.HideCommandPromptWindow = true;
-                    return new ChromeDriver(service, options, TimeSpan.FromSeconds(LoginTimeoutSeconds));
-                }
-                catch (Exception ex)
-                {
-                    // A stale driver (Chrome updated) is the usual reason. Fall
-                    // through to Selenium Manager instead of giving up.
-                    Log(log, "bundled driver failed: " + RootMessage(ex));
+                    Log(log, "using cached driver " + cached);
+                    return created;
                 }
             }
 
@@ -460,28 +460,15 @@ namespace TallyWhatsappSender
             // SeleniumManager wrapper locates the binary through
             // AppContext.BaseDirectory, which inside powershell.exe (or any
             // host other than Tally) points at the host's folder - that is why
-            // the wrapper failed with a type-initializer exception. Running the
-            // executable ourselves and using the driver path it prints works
-            // no matter which process loaded this DLL.
+            // the wrapper failed with a type-initializer exception.
             string managerExe = FindSeleniumManager(baseDir);
             if (managerExe != null)
             {
                 string managedDriver = RunSeleniumManager(managerExe, log);
                 if (!string.IsNullOrEmpty(managedDriver) && File.Exists(managedDriver))
                 {
-                    try
-                    {
-                        ChromeDriverService service = ChromeDriverService.CreateDefaultService(
-                            Path.GetDirectoryName(managedDriver), Path.GetFileName(managedDriver));
-                        service.HideCommandPromptWindow = true;
-                        return new ChromeDriver(service, options, TimeSpan.FromSeconds(LoginTimeoutSeconds));
-                    }
-                    catch (Exception ex)
-                    {
-                        throw new InvalidOperationException(
-                            "Chrome did not start with the driver reported by Selenium Manager (" +
-                            managedDriver + "): " + RootMessage(ex), ex);
-                    }
+                    IWebDriver created = TryStartChrome(managedDriver, options, log);
+                    if (created != null) return created;
                 }
             }
 
@@ -498,10 +485,66 @@ namespace TallyWhatsappSender
                     ? ""
                     : " The bundled Selenium driver manager was not found under " + baseDir + ".";
                 throw new InvalidOperationException(
-                    "Chrome did not start. No chromedriver.exe sits next to the DLL and the bundled " +
-                    "Selenium Manager could not provide one." + hint +
-                    " Check that Google Chrome is installed and that this machine has internet access " +
-                    "for the one-time driver download. Original error: " + RootMessage(ex), ex);
+                    "Chrome did not start. No working chromedriver.exe was found next to the DLL or in " +
+                    "the Selenium cache, and Selenium Manager could not provide one." + hint +
+                    " Re-run scripts\\install.ps1 (it downloads the driver that matches Chrome); check " +
+                    "that Google Chrome is installed and that this machine has internet access. " +
+                    "Original error: " + RootMessage(ex), ex);
+            }
+        }
+
+        private static IWebDriver TryStartChrome(string driverExe, ChromeOptions options, StringBuilder log)
+        {
+            try
+            {
+                ChromeDriverService service = ChromeDriverService.CreateDefaultService(
+                    Path.GetDirectoryName(driverExe), Path.GetFileName(driverExe));
+                service.HideCommandPromptWindow = true;
+                return new ChromeDriver(service, options, TimeSpan.FromSeconds(LoginTimeoutSeconds));
+            }
+            catch (Exception ex)
+            {
+                Log(log, "driver " + driverExe + " failed: " + RootMessage(ex));
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Drivers downloaded earlier by Selenium Manager live under
+        /// %USERPROFILE%\.cache\selenium\chromedriver\win64\&lt;version&gt;.
+        /// Trying them means a Chrome update no longer needs a fresh install:
+        /// if one of the newer cached drivers matches, it is used.
+        /// </summary>
+        private static IEnumerable<string> CachedDriverPaths()
+        {
+            string root;
+            try
+            {
+                root = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".cache", "selenium", "chromedriver");
+            }
+            catch { yield break; }
+
+            foreach (string platform in new[] { "win64", "win32" })
+            {
+                string platformDir = Path.Combine(root, platform);
+                string[] versions;
+                try
+                {
+                    if (!Directory.Exists(platformDir)) continue;
+                    versions = Directory.GetDirectories(platformDir);
+                }
+                catch { continue; }
+
+                Array.Sort(versions);
+                Array.Reverse(versions);
+
+                foreach (string versionDir in versions)
+                {
+                    string exe = Path.Combine(versionDir, "chromedriver.exe");
+                    if (File.Exists(exe)) yield return exe;
+                }
             }
         }
 
@@ -532,7 +575,7 @@ namespace TallyWhatsappSender
                 var start = new ProcessStartInfo
                 {
                     FileName = managerExe,
-                    Arguments = "--browser chrome --avoid-browser-download --output json",
+                    Arguments = "--browser chrome --output json",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

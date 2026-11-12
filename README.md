@@ -63,8 +63,8 @@ Tally.ERP 9 Release 4.6. The DLL does the browser automation.
 * **Google Chrome** installed
 * **.NET Framework 4.8** (already present on Windows 11)
 * To build: the **.NET SDK** (`dotnet`) — [download](https://dotnet.microsoft.com/download)
-* Internet access the first time so WhatsApp Web can be logged in and, if you do
-  not bundle `chromedriver.exe`, so Selenium Manager can fetch it.
+* Internet access the first time so WhatsApp Web can be logged in and so the
+  installer can download the ChromeDriver that matches your Chrome.
 
 ---
 
@@ -88,10 +88,11 @@ Output lands in `src\TallyWhatsappSender\bin\Release\`.
 > `-ExecutionPolicy Bypass` applies to that one invocation only — it does **not**
 > change the machine-wide policy.
 
-> `chromedriver.exe` (optional): Selenium 4 can fetch a matching driver
-> automatically, but for an offline machine drop a `chromedriver.exe` that
-> matches your Chrome version into the build output. The DLL prefers a local
-> `chromedriver.exe` if it finds one.
+> `chromedriver.exe`: the installer downloads the build that matches the Chrome
+> it finds and places it next to `Tally.exe`. The DLL also looks for drivers in
+> Selenium's cache (`%USERPROFILE%\.cache\selenium\chromedriver`) and only then
+> falls back to `selenium-manager.exe`. To refresh the driver after a Chrome
+> update, re-run `scripts\install.ps1`.
 
 ---
 
@@ -258,12 +259,12 @@ Notes:
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
 | `Could not load file or assembly 'WebDriver … PublicKeyToken=null' … 0x80131044` | The DLL was strong-named while Selenium's `WebDriver.dll` is not. A strong-named assembly cannot reference a weak-named one, so the send flow died before logging anything — which looked like "no error, nothing sent". Update to 1.0.11 or later (the assembly is unsigned). |
-| *"Could not load file or assembly 'System.Text.Json, Version=8.0.0.0' … 0x80131040"* | The DLL ships `System.Text.Json` 8.0.4, whose assembly version is 8.0.0.4, while Selenium asks for 8.0.0.0. Tally.exe owns the config file, so no binding redirect can be added; versions before 1.0.6 therefore failed. Update to 1.0.6 or later, which resolves the reference from the DLL's own folder (`AssemblyResolve` in `WhatsAppSender.cs`). |
+| *"Could not load file or assembly 'System.Text.Json, Version=8.0.0.0' …"* | Selenium 4.25 depends on `System.Text.Json`, whose shipped assembly version (8.0.0.4) does not match the reference (8.0.0.0), and Tally.exe owns the config file so no binding redirect can be applied. Versions before 1.0.13 therefore failed when the first Selenium type was used. 1.0.13 uses Selenium 4.9, which has no `System.Text.Json` dependency. |
 | WhatsApp Web shows a QR code | First run only. Scan it within 5 minutes; the send continues automatically and the session is stored in `%LOCALAPPDATA%\TallyWhatsAppSender\chrome-profile`. To force a new code, close Chrome/Tally and delete that folder. |
 | *"WhatsApp Web is not logged in"* | The 5-minute QR window expired. Save the voucher again and scan the code in the Chrome window while the prompt is waiting. |
 | The log stops after `chrome = …` | It no longer can: every line is flushed to the file as it happens, so the last line names the stage that failed. Older builds buffered the whole block until the end. |
 | `resolved pdf = … (exists = False)` | The PDF export did not produce the file. Check `WAFolder` and that the voucher report exports (see `SVPrintFileName`/`SVExportFormat`). |
-| `starting Chrome ...` is the last line | Chrome or the driver did not start. Look for the `ERROR` / `caused by` lines that follow. With no `chromedriver.exe` next to the DLL, the log shows `selenium-manager = …` and its output: the first run needs internet to download a driver that matches Chrome. If a bundled driver is stale after a Chrome update, the log says `bundled driver failed` and retries with Selenium Manager. |
+| `starting Chrome ...` is the last line | Chrome or the driver did not start. The log lists each driver tried (`bundled driver failed: …`, then cached drivers, then `selenium-manager = …`). Re-run `scripts\install.ps1` to download a `chromedriver.exe` matching the current Chrome; it is placed next to `Tally.exe`. |
 | `The type initializer for 'OpenQA.Selenium.Internal.SeleniumManager' threw an exception` | Older builds let Selenium locate its manager through `AppContext.BaseDirectory`, which points at the host process (Tally or PowerShell) instead of the DLL. Update to 1.0.12 or later, which runs the bundled `selenium-manager.exe` itself and uses the `driver_path` it prints. |
 | `document preview did not appear` / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `DocumentMenuItemXPaths`, `CaptionBoxXPaths`, `SendButtonXPaths`, `FindFileInput`). |
 | `the Send click … did not produce a message in the chat` | The DLL clicked Send but no new document bubble appeared, so it reports a failure instead of a false success. The log shows whether the file input, the preview and the caption box were found; compare that with the Chrome window. |
