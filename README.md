@@ -193,6 +193,14 @@ Then load the TDL in Tally:
   it is per Windows user and separate from your normal Chrome profile.
 * WhatsApp keeps the link until you remove it on your phone or delete that
   folder. To force a fresh QR code, close Tally and delete the folder.
+* **The result is always shown in a message box raised by the DLL itself.** The
+  TDL has no `Msg Box` for it, because not every TallyPrime build fills
+  `$$LastResult` with the COM return value — an empty box made failures look
+  like silence. Success reads `Success: invoice sent on WhatsApp to …`; anything
+  else starts with `Error:` and names the stage.
+* The send is **verified**: after the Send click the document preview must close.
+  If it stays open, the click did not go through and the dialog says so instead
+  of claiming success.
 * If the 5 minutes pass without a scan, the dialog says so and nothing is sent —
   save the voucher again to retry.
 * If the phone has no internet or WhatsApp Web is down, the dialog reports that

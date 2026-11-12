@@ -65,21 +65,19 @@
                 ;;    The call is made unconditionally. $$IsCOMInterfaceInvokable
                 ;;    is NOT used as a gate: it reports false on some TallyPrime
                 ;;    builds even when the object can be created, and its
-                ;;    "not available" answer hid the real error. If the call
-                ;;    fails, Tally reports the actual problem instead.
+                ;;    "not available" answer hid the real error.
+                ;;
+                ;;    The DLL shows its own result dialog, so there is no Msg Box
+                ;;    here - $$LastResult is not populated by every TallyPrime
+                ;;    build, and an empty box made failures look like silence.
     013 :     SET : vCaption : @@Caption
     014 :     EXEC COM INTERFACE : WhatsAppEngine : ##vContacts : ##SVPrintFileName : ##vCaption : @@ChromeBinaryPath
-    015 :     If : $$IsEmpty:$$LastResult
-    016 :       Msg Box : "WhatsApp" : "The helper returned no message. Open %LOCALAPPDATA%\TallyWhatsAppSender\log.txt to see how far it got."
-    017 :     Else
-    018 :       Msg Box : "WhatsApp" : $$LastResult
-    019 :     End If
 
-    020 :   End If
+    015 :   End If
 
-    021 : End If
+    016 : End If
 
-    022 : Return
+    017 : Return
 
 
 ;; ---------------------------------------------------------------------------

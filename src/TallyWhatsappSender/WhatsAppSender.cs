@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Windows.Forms;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 
@@ -113,9 +114,43 @@ namespace TallyWhatsappSender
         /// <summary>
         /// Called from TDL:
         ///   EXEC COM INTERFACE : WhatsAppEngine : contacts : pdfPath : caption : chromeBinary
-        /// Returns a status string which Tally shows in a message box.
+        ///
+        /// The outcome is displayed from here as well as returned. Not every
+        /// TallyPrime build puts the COM return value into $$LastResult, and a
+        /// missing dialog makes a failed send look like nothing happened at all.
         /// </summary>
         public string Send(string contacts, string pdfPath, string caption, string chromeBinary)
+        {
+            string result;
+            try
+            {
+                result = SendCore(contacts, pdfPath, caption, chromeBinary);
+            }
+            catch (Exception ex)
+            {
+                result = "Error: " + ex.GetType().Name + ": " + ex.Message;
+            }
+
+            try
+            {
+                MessageBox.Show(
+                    result,
+                    "WhatsApp",
+                    MessageBoxButtons.OK,
+                    result.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
+                        ? MessageBoxIcon.Warning
+                        : MessageBoxIcon.Information);
+            }
+            catch
+            {
+                // No interactive desktop: the log and the return value still
+                // carry the result.
+            }
+
+            return result;
+        }
+
+        private string SendCore(string contacts, string pdfPath, string caption, string chromeBinary)
         {
             var log = new StringBuilder();
             IWebDriver driver = null;
@@ -232,6 +267,18 @@ namespace TallyWhatsappSender
                     js.ExecuteScript("arguments[0].click();", send);
                     Log(log, "clicked send for " + number);
 
+                    // The preview panel closes only once WhatsApp accepts the
+                    // attachment. If the click did not register, the preview
+                    // stays open and the message would silently never be sent -
+                    // which is exactly the "no error, but nothing arrived" case.
+                    if (!WaitUntil(() => FindVisible(driver, SendButtonXPaths) == null,
+                                   TimeSpan.FromSeconds(ElementTimeoutSeconds)))
+                    {
+                        return "Error: the document preview for " + number + " stayed open, " +
+                               "so the Send click did not go through. Check the Chrome window.";
+                    }
+
+                    Log(log, "preview closed - message accepted for " + number);
                     Thread.Sleep(5000); // let the upload finish before the next contact
                 }
 
