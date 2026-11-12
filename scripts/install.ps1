@@ -77,8 +77,20 @@ foreach ($regasm in $regasms) {
     }
     Write-Host "Registering COM DLL with $regasm ..." -ForegroundColor Cyan
     Write-Host "  $installedDll"
-    & $regasm $installedDll /codebase
-    if ($LASTEXITCODE -ne 0) { throw "regasm failed with exit code $LASTEXITCODE ($regasm)." }
+
+    # The DLL is intentionally unsigned (see the .csproj), so regasm prints the
+    # advisory warning RA0000. Under $ErrorActionPreference='Stop' any stderr
+    # output becomes a terminating error, so relax it for this call and judge by
+    # the exit code instead.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $regasm $installedDll /codebase 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($code -ne 0) { throw "regasm failed with exit code $code ($regasm)." }
 }
 
 

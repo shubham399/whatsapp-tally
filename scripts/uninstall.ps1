@@ -41,7 +41,10 @@ if (Test-Path $dll) {
     foreach ($regasm in $regasms) {
         if (Test-Path $regasm) {
             Write-Host "Unregistering $dll with $regasm ..." -ForegroundColor Cyan
-            & $regasm $dll /unregister
+            $previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try { & $regasm $dll /unregister 2>&1 | ForEach-Object { Write-Host "  $_" } }
+            finally { $ErrorActionPreference = $previous }
         }
     }
     Remove-Item $dll -Force -ErrorAction SilentlyContinue

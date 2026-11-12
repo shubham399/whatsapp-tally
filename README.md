@@ -49,8 +49,7 @@ Tally.ERP 9 Release 4.6. The DLL does the browser automation.
 | --- | --- |
 | `TDL/WhatsAppSender.tdl` | The Tally TDL: form hook, PDF export, COM call, settings. |
 | `src/TallyWhatsappSender/WhatsAppSender.cs` | The COM class that drives Chrome / WhatsApp Web. |
-| `src/TallyWhatsappSender/TallyWhatsappSender.csproj` | Project file (`net48`, `AnyCPU`, strong-named, Selenium 4). |
-| `src/TallyWhatsappSender/TallyWhatsappSender.snk` | Public key used for the strong name. |
+| `src/TallyWhatsappSender/TallyWhatsappSender.csproj` | Project file (`net48`, `AnyCPU`, unsigned, Selenium 4). |
 | `scripts/build.ps1` | Builds the DLL. |
 | `scripts/install.ps1` | Copies the DLLs to the Tally folder, copies the TDL to the TDL folder, registers COM, creates the export folder. |
 | `scripts/uninstall.ps1` | Unregisters and removes files. |
@@ -126,10 +125,11 @@ This will:
    `regasm /codebase` (so it works whichever architecture TallyPrime is), then
    verify both registry views and print the result.
 
-The DLL is **strong-named** (`src/TallyWhatsappSender/TallyWhatsappSender.snk`),
-so `regasm` does not print the *"Registering an unsigned assembly with
-/codebase"* warning (`RA0000`). That warning is only advisory and never caused
-registration to fail — signing does not affect whether Tally can load the class.
+The DLL is **not strong-named on purpose**. Selenium's `WebDriver.dll` has no
+strong name, and a strong-named assembly cannot reference it: the CLR fails with
+`HRESULT 0x80131044` (*"A strongly-named assembly is required"*) as soon as a
+Selenium type is used, before the send flow can log anything. `regasm` prints
+the advisory warning `RA0000` for an unsigned assembly, which is harmless.
 
 The verification report creates the COM object the same way Tally does — once
 from a 64-bit PowerShell and once from a 32-bit one — because the success or
@@ -257,6 +257,7 @@ Notes:
 | Not sure if registration took | `scripts/install.ps1` ends by creating the COM object from both a 64-bit and a 32-bit PowerShell and printing `COM activation (64-bit) : OK` / `COM activation (32-bit) : OK`, plus the architecture of your Tally executable. A failure prints the raw COM error under the architecture Tally uses. Registry-key checks are not used: whether they pass depends on the probing process's view. |
 | *"no valid 10-digit mobile number"* | The prompt only appears when the ledger's **Mobile No.** is filled, but the value is not a usable 10-digit number. Correct it on the party ledger. |
 | *"invoice PDF not found"* | The export failed. Check that `WAFolder` is writable and that the voucher print format is valid. |
+| `Could not load file or assembly 'WebDriver … PublicKeyToken=null' … 0x80131044` | The DLL was strong-named while Selenium's `WebDriver.dll` is not. A strong-named assembly cannot reference a weak-named one, so the send flow died before logging anything — which looked like "no error, nothing sent". Update to 1.0.11 or later (the assembly is unsigned). |
 | *"Could not load file or assembly 'System.Text.Json, Version=8.0.0.0' … 0x80131040"* | The DLL ships `System.Text.Json` 8.0.4, whose assembly version is 8.0.0.4, while Selenium asks for 8.0.0.0. Tally.exe owns the config file, so no binding redirect can be added; versions before 1.0.6 therefore failed. Update to 1.0.6 or later, which resolves the reference from the DLL's own folder (`AssemblyResolve` in `WhatsAppSender.cs`). |
 | WhatsApp Web shows a QR code | First run only. Scan it within 5 minutes; the send continues automatically and the session is stored in `%LOCALAPPDATA%\TallyWhatsAppSender\chrome-profile`. To force a new code, close Chrome/Tally and delete that folder. |
 | *"WhatsApp Web is not logged in"* | The 5-minute QR window expired. Save the voucher again and scan the code in the Chrome window while the prompt is waiting. |
