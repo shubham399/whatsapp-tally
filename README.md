@@ -198,14 +198,32 @@ Then load the TDL in Tally:
   `$$LastResult` with the COM return value — an empty box made failures look
   like silence. Success reads `Success: invoice sent on WhatsApp to …`; anything
   else starts with `Error:` and names the stage.
-* The send is **verified**: after the Send click the document preview must close.
-  If it stays open, the click did not go through and the dialog says so instead
-  of claiming success.
+* The send is **verified**: after the Send click, a new document bubble with the
+  invoice file name must appear in the chat. If it does not, the click is
+  retried once (Enter in the caption box) and then reported as an error rather
+  than a false success.
 * If the 5 minutes pass without a scan, the dialog says so and nothing is sent —
   save the voucher again to retry.
 * If the phone has no internet or WhatsApp Web is down, the dialog reports that
   the chat list never appeared; the log at
   `%LOCALAPPDATA%\TallyWhatsAppSender\log.txt` says which stage failed.
+
+---
+
+## Test without Tally
+
+`scripts/selftest.ps1` calls the installed COM object directly, so the Chrome /
+WhatsApp Web part can be tested without saving a voucher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\selftest.ps1 -Number 9876543210
+powershell -ExecutionPolicy Bypass -File .\scripts\selftest.ps1 -Number 9876543210 -Pdf C:\path\invoice.pdf
+```
+
+It prints the result and the last 30 log lines. Without `-Pdf` it picks the
+newest PDF in `OneDrive\Export`, the Desktop, Downloads or Documents. It uses
+`SendSilent` (same flow, no result dialog), so no Administrator rights and no
+Tally restart are needed.
 
 ---
 
@@ -245,7 +263,9 @@ Notes:
 | The log stops after `chrome = …` | It no longer can: every line is flushed to the file as it happens, so the last line names the stage that failed. Older builds buffered the whole block until the end. |
 | `resolved pdf = … (exists = False)` | The PDF export did not produce the file. Check `WAFolder` and that the voucher report exports (see `SVPrintFileName`/`SVExportFormat`). |
 | `starting Chrome ...` is the last line | Chrome or the driver did not start. Look for the `ERROR` line that follows; if it mentions `chromedriver.exe`, delete that file next to the DLL so Selenium Manager can fetch the matching driver. |
-| `document preview did not appear` / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `SendButtonXPaths`, `ComposeBoxXPaths`, `FindFileInput`). |
+| `document preview did not appear` / attachment not sent | WhatsApp Web's page markup changed. Update the selector lists at the top of `WhatsAppSender.cs` (`AttachButtonXPaths`, `DocumentMenuItemXPaths`, `CaptionBoxXPaths`, `SendButtonXPaths`, `FindFileInput`). |
+| `the Send click … did not produce a message in the chat` | The DLL clicked Send but no new document bubble appeared, so it reports a failure instead of a false success. The log shows whether the file input, the preview and the caption box were found; compare that with the Chrome window. |
+| WhatsApp Web says the number is invalid | The normalised number is not registered on WhatsApp. The log records the number that was tried and the value from the party ledger. |
 | The voucher is **not saved** after the prompt | On a build where `On: Form Accept` replaces the default save, add a second handler so the form is accepted explicitly (see below). |
 | TDL fails to load | Remove the line(s) the compiler complains about. The `EXPORT REPORT`/`SV*` variables are the most version-sensitive; see notes below. |
 

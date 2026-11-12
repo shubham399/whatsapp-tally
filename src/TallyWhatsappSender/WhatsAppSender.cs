@@ -70,23 +70,56 @@ namespace TallyWhatsappSender
         private static readonly string[] ComposeBoxXPaths =
         {
             "//footer//div[@contenteditable='true']",
-            "//div[@id='main']//div[@contenteditable='true']"
+            "//footer//div[@role='textbox']",
+            "//div[@id='main']//footer//div[@contenteditable='true']"
+        };
+
+        // The caption field of the attachment preview. It is identified by its
+        // aria-label or by being a contenteditable inside #main but outside the
+        // footer (which rules out the normal compose box and the chat-list
+        // search field).
+        private static readonly string[] CaptionBoxXPaths =
+        {
+            "//div[@aria-label='Add a caption']",
+            "//div[contains(@aria-label,'aption')]",
+            "//div[@id='main']//div[@contenteditable='true'][not(ancestor::footer)]",
+            "//div[@id='main']//div[@role='textbox'][@contenteditable='true'][not(ancestor::footer)]"
         };
 
         private static readonly string[] SendButtonXPaths =
         {
             "//span[@data-icon='send']",
+            "//span[@data-icon='wds-ic-send-filled']",
+            "//span[@data-icon='send-filled']",
+            "//span[@data-icon='wds-ic-send']",
             "//button[@aria-label='Send']",
             "//div[@role='button'][@aria-label='Send']",
-            "//div[@aria-label='Send']"
+            "//div[@aria-label='Send']",
+            "//button[@data-testid='send']"
         };
 
         private static readonly string[] AttachButtonXPaths =
         {
             "//span[@data-icon='plus']",
+            "//span[@data-icon='plus-rounded']",
+            "//span[@data-icon='wds-ic-add']",
             "//span[@data-icon='clip']",
+            "//span[@data-icon='attach']",
+            "//button[@aria-label='Attach']",
+            "//div[@role='button'][@aria-label='Attach']",
+            "//div[@title='Attach']",
             "//button[@title='Attach']",
-            "//div[@title='Attach']"
+            "//div[@role='button'][.//span[@data-icon='plus']]"
+        };
+
+        // Clicked only when no file input exists after the attach menu opens.
+        private static readonly string[] DocumentMenuItemXPaths =
+        {
+            "//*[@aria-label='Document']",
+            "//button[@aria-label='Document']",
+            "//div[@role='menuitem'][contains(.,'Document')]",
+            "//li[contains(.,'Document')]",
+            "//*[normalize-space(text())='Document']"
         };
 
         // The chat list only exists once WhatsApp Web is logged in.
@@ -121,15 +154,7 @@ namespace TallyWhatsappSender
         /// </summary>
         public string Send(string contacts, string pdfPath, string caption, string chromeBinary)
         {
-            string result;
-            try
-            {
-                result = SendCore(contacts, pdfPath, caption, chromeBinary);
-            }
-            catch (Exception ex)
-            {
-                result = "Error: " + ex.GetType().Name + ": " + ex.Message;
-            }
+            string result = Run(contacts, pdfPath, caption, chromeBinary);
 
             try
             {
@@ -148,6 +173,27 @@ namespace TallyWhatsappSender
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Same as Send, but without the dialog. Used by scripts\selftest.ps1 so
+        /// the flow can be exercised outside Tally without a box to click.
+        /// </summary>
+        public string SendSilent(string contacts, string pdfPath, string caption, string chromeBinary)
+        {
+            return Run(contacts, pdfPath, caption, chromeBinary);
+        }
+
+        private string Run(string contacts, string pdfPath, string caption, string chromeBinary)
+        {
+            try
+            {
+                return SendCore(contacts, pdfPath, caption, chromeBinary);
+            }
+            catch (Exception ex)
+            {
+                return "Error: " + ex.GetType().Name + ": " + ex.Message;
+            }
         }
 
         private string SendCore(string contacts, string pdfPath, string caption, string chromeBinary)
@@ -202,8 +248,6 @@ namespace TallyWhatsappSender
                 driver = CreateDriver(baseDir, driverExe, options);
                 Log(log, "Chrome started, browser version = " + SafeBrowserVersion(driver));
 
-                var js = (IJavaScriptExecutor)driver;
-
                 if (!EnsureLoggedIn(driver, log))
                 {
                     return "Error: WhatsApp Web is not logged in. The Chrome window should be showing " +
@@ -224,39 +268,55 @@ namespace TallyWhatsappSender
                     if (!WaitUntil(() => FindVisible(driver, ComposeBoxXPaths) != null,
                                    TimeSpan.FromSeconds(ElementTimeoutSeconds)))
                     {
+                        if (FindText(driver, "invalid") != null)
+                        {
+                            Log(log, "WhatsApp Web reports the number as invalid");
+                            return "Error: WhatsApp Web says " + number + " is not a valid WhatsApp " +
+                                   "number. Check the Mobile No. in the party ledger.";
+                        }
                         return "Error: WhatsApp Web did not open a chat for " + number + ". " +
                                "Check that the number is registered on WhatsApp.";
                     }
 
-                    IWebElement fileInput = FindFileInput(driver);
-                    if (fileInput == null)
-                    {
-                        ClickAttach(driver);
-                        WaitUntil(() => FindFileInput(driver) != null, TimeSpan.FromSeconds(5));
-                        fileInput = FindFileInput(driver);
-                    }
-                    if (fileInput == null)
-                        return "Error: could not find the WhatsApp Web attachment control for " + number + ".";
+                    // Let any pending history render before counting, so a late
+                    // load cannot look like a newly sent message.
+                    Thread.Sleep(2000);
 
-                    fileInput.SendKeys(pdfPath);
+                    string fileBase = Path.GetFileNameWithoutExtension(pdfPath);
+                    int messagesBefore = OutgoingMessageCount(driver);
+                    int documentsBefore = DocumentMessageCount(driver, fileBase);
+                    Log(log, "chat ready: " + messagesBefore + " outgoing message(s), " +
+                             documentsBefore + " with this file name");
 
-                    if (!WaitUntil(() => FindVisible(driver, SendButtonXPaths) != null,
+                    string attachError = AttachDocument(driver, pdfPath, log);
+                    if (attachError != null)
+                        return attachError;
+
+                    Log(log, "handed " + Path.GetFileName(pdfPath) + " to the page - waiting for the preview");
+
+                    if (!WaitUntil(() => FindVisible(driver, CaptionBoxXPaths) != null,
                                    TimeSpan.FromSeconds(ElementTimeoutSeconds)))
                     {
-                        return "Error: the document preview did not appear for " + number + ".";
+                        return "Error: the document preview did not appear for " + number + ". " +
+                               "The file was handed to WhatsApp Web but it did not show the preview.";
                     }
 
                     if (!string.IsNullOrEmpty(caption))
                     {
-                        IWebElement box = FindVisible(driver, ComposeBoxXPaths);
+                        IWebElement box = FindVisible(driver, CaptionBoxXPaths);
                         if (box != null)
                         {
                             try
                             {
-                                box.Click();
-                                box.SendKeys(caption);
+                                ClickElement(driver, box);
+                                box.SendKeys(Flatten(caption));
+                                Log(log, "typed the caption");
                             }
                             catch (Exception ex) { Log(log, "caption failed: " + ex.Message); }
+                        }
+                        else
+                        {
+                            Log(log, "caption box not found - sending without a caption");
                         }
                     }
 
@@ -264,21 +324,44 @@ namespace TallyWhatsappSender
                     if (send == null)
                         return "Error: could not find the Send button for " + number + ".";
 
-                    js.ExecuteScript("arguments[0].click();", send);
+                    ClickElement(driver, send);
                     Log(log, "clicked send for " + number);
 
-                    // The preview panel closes only once WhatsApp accepts the
-                    // attachment. If the click did not register, the preview
-                    // stays open and the message would silently never be sent -
-                    // which is exactly the "no error, but nothing arrived" case.
-                    if (!WaitUntil(() => FindVisible(driver, SendButtonXPaths) == null,
-                                   TimeSpan.FromSeconds(ElementTimeoutSeconds)))
+                    // The document bubble only appears once WhatsApp accepts the
+                    // attachment. Counting it (rather than trusting the click)
+                    // is what turns "no error, but nothing arrived" into a real
+                    // answer for the user.
+                    bool delivered = WaitUntil(
+                        () => Sent(driver, fileBase, documentsBefore, messagesBefore),
+                        TimeSpan.FromSeconds(ElementTimeoutSeconds));
+
+                    if (!delivered)
                     {
-                        return "Error: the document preview for " + number + " stayed open, " +
-                               "so the Send click did not go through. Check the Chrome window.";
+                        // Enter in the caption box sends the pending attachment;
+                        // try it once if the Send click did not take.
+                        Log(log, "no new message appeared - pressing Enter as a fallback");
+                        IWebElement box = FindVisible(driver, CaptionBoxXPaths);
+                        if (box != null)
+                        {
+                            try
+                            {
+                                ClickElement(driver, box);
+                                box.SendKeys(OpenQA.Selenium.Keys.Enter);
+                            }
+                            catch { }
+                            delivered = WaitUntil(
+                                () => Sent(driver, fileBase, documentsBefore, messagesBefore),
+                                TimeSpan.FromSeconds(20));
+                        }
                     }
 
-                    Log(log, "preview closed - message accepted for " + number);
+                    if (!delivered)
+                    {
+                        return "Error: the Send click for " + number + " did not produce a message in the chat. " +
+                               "Check the Chrome window; the log records which step found what.";
+                    }
+
+                    Log(log, "message appears in the chat for " + number);
                     Thread.Sleep(5000); // let the upload finish before the next contact
                 }
 
@@ -485,29 +568,189 @@ namespace TallyWhatsappSender
                 IReadOnlyCollection<IWebElement> inputs =
                     driver.FindElements(By.CssSelector("input[type='file']"));
 
-                IWebElement fallback = null;
+                IWebElement first = null;
                 foreach (IWebElement input in inputs)
                 {
-                    fallback = input;
+                    if (first == null) first = input;
                     string accept = "";
                     try { accept = (input.GetAttribute("accept") ?? "").ToLowerInvariant(); } catch { }
-                    // The document input is the one not limited to images/videos.
+
+                    // The document input accepts PDFs/application files; the
+                    // photo and video entries explicitly limit themselves.
+                    if (accept.Contains("pdf") || accept.Contains("application"))
+                        return input;
                     if (!accept.Contains("image") && !accept.Contains("video"))
                         return input;
                 }
-                return fallback;
+                return first;
             }
             catch { return null; }
         }
 
-        private static void ClickAttach(IWebDriver driver)
+        private static IWebElement WaitForFileInput(IWebDriver driver, TimeSpan timeout)
         {
-            IWebElement button = FindVisible(driver, AttachButtonXPaths);
-            if (button != null)
+            IWebElement found = null;
+            WaitUntil(() => (found = FindFileInput(driver)) != null, timeout);
+            return found;
+        }
+
+        /// <summary>
+        /// Hands the PDF to WhatsApp Web and returns null on success, or the
+        /// error text to show. The file input usually exists as soon as the
+        /// attach menu has been opened; the Document menu entry is only clicked
+        /// when no input can be found.
+        /// </summary>
+        private static string AttachDocument(IWebDriver driver, string pdfPath, StringBuilder log)
+        {
+            IWebElement input = WaitForFileInput(driver, TimeSpan.FromSeconds(3));
+
+            if (input == null)
             {
-                try { ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", button); }
+                Log(log, "no file input yet - opening the attach menu");
+                IWebElement attach = FindVisible(driver, AttachButtonXPaths);
+                if (attach == null)
+                {
+                    return "Error: could not find the WhatsApp Web attach button. " +
+                           "The page layout may have changed; open WhatsApp Web in Chrome and check the log.";
+                }
+
+                ClickElement(driver, attach);
+                input = WaitForFileInput(driver, TimeSpan.FromSeconds(10));
+            }
+
+            if (input == null)
+            {
+                Log(log, "still no file input - clicking the Document entry");
+                IWebElement document = FindVisible(driver, DocumentMenuItemXPaths);
+                if (document != null)
+                {
+                    ClickElement(driver, document);
+                    input = WaitForFileInput(driver, TimeSpan.FromSeconds(5));
+                }
+            }
+
+            if (input == null)
+            {
+                return "Error: could not find the WhatsApp Web attachment control. " +
+                       "The page layout may have changed; open WhatsApp Web in Chrome and check the log.";
+            }
+
+            Log(log, "file input found - setting " + Path.GetFileName(pdfPath));
+            input.SendKeys(pdfPath);
+            return null;
+        }
+
+        private static void ClickElement(IWebDriver driver, IWebElement element)
+        {
+            try { element.Click(); return; } catch { }
+
+            var js = driver as IJavaScriptExecutor;
+            if (js == null) return;
+
+            try { js.ExecuteScript("arguments[0].scrollIntoView({block:'center'});", element); } catch { }
+            try { js.ExecuteScript("arguments[0].click();", element); return; } catch { }
+
+            // The clickable target is often a parent button, not the icon span
+            // Selenium found.
+            try
+            {
+                IWebElement parent = element.FindElement(
+                    By.XPath("ancestor::button[1] | ancestor::div[@role='button'][1]"));
+                js.ExecuteScript("arguments[0].click();", parent);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// WhatsApp Web shows the new document bubble as soon as it accepts the
+        /// attachment. A new bubble is the proof that the send really happened;
+        /// the previous "preview closed" check could pass on a page that never
+        /// had a preview in the first place.
+        /// </summary>
+        private static bool Sent(IWebDriver driver, string fileBase, int documentsBefore, int messagesBefore)
+        {
+            if (DocumentMessageCount(driver, fileBase) > documentsBefore) return true;
+
+            // Some WhatsApp Web versions render the file name in a way the text
+            // search cannot see. Fall back to "a new outgoing message appeared
+            // AND the attachment preview is gone".
+            return OutgoingMessageCount(driver) > messagesBefore &&
+                   FindVisible(driver, CaptionBoxXPaths) == null;
+        }
+
+        private static int OutgoingMessageCount(IWebDriver driver)
+        {
+            int best = 0;
+            string[] selectors =
+            {
+                "div.message-out",
+                "div[class*='message-out']",
+                "div[data-testid='msg-container'].message-out"
+            };
+
+            foreach (string selector in selectors)
+            {
+                try
+                {
+                    int count = driver.FindElements(By.CssSelector(selector)).Count;
+                    if (count > best) best = count;
+                }
                 catch { }
             }
+            return best;
+        }
+
+        /// <summary>
+        /// Counts sent bubbles that show this file name. The search is limited to
+        /// outgoing messages so the attachment preview (which also shows the file
+        /// name) is not mistaken for a delivered message.
+        /// </summary>
+        private static int DocumentMessageCount(IWebDriver driver, string fileBase)
+        {
+            if (string.IsNullOrEmpty(fileBase)) return 0;
+            try
+            {
+                string xpath =
+                    "//div[@id='main']//div[contains(@class,'message-out')]" +
+                    "//*[contains(text()," + XPathLiteral(fileBase) + ")]";
+                return driver.FindElements(By.XPath(xpath)).Count;
+            }
+            catch { return 0; }
+        }
+
+        private static string XPathLiteral(string value)
+        {
+            if (value.IndexOf('\'') < 0) return "'" + value + "'";
+            if (value.IndexOf('"') < 0) return "\"" + value + "\"";
+            return "concat('" + value.Replace("'", "',\"'\",'") + "')";
+        }
+
+        private static IWebElement FindText(IWebDriver driver, string needle)
+        {
+            try
+            {
+                string xpath =
+                    "//*[contains(translate(normalize-space(.)," +
+                    "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')," +
+                    XPathLiteral(needle.ToLowerInvariant()) + ")]";
+                IReadOnlyCollection<IWebElement> matches = driver.FindElements(By.XPath(xpath));
+                foreach (IWebElement match in matches)
+                {
+                    try { if (match.Displayed) return match; } catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// Captions come from TDL and can contain line breaks. SendKeys treats a
+        /// newline as Enter, which would send the message before the caption is
+        /// complete, so flatten it first.
+        /// </summary>
+        private static string Flatten(string text)
+        {
+            return text.Replace("\r", " ").Replace("\n", " ");
         }
 
         private static void DismissAlert(IWebDriver driver)
